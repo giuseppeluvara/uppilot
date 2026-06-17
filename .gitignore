@@ -29,3 +29,6 @@ models/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Documenti di riferimento forniti (fascicoli/sample) — non versionati
+docs/sample-output/
