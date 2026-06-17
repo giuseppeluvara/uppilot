@@ -11,6 +11,10 @@ piattaforma.
 
 Licenza: **AGPL-3.0-or-later**.
 
+> 👤 **Sei un operatore (redattore UPP) e vuoi solo usare il programma?** Vai alla
+> **[Guida operativa](GUIDA.md)** — avvio, uso passo per passo, spegnimento, backup e problemi
+> comuni. Questo README è la documentazione tecnica/architetturale.
+
 ---
 
 ## ⚠️ Avvertenza privacy / GDPR (leggere prima dell'uso)
