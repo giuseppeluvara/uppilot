@@ -1,0 +1,5 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+# transformers >= 5.x: include l'architettura `openai_privacy_filter` (modello uscito nel 2026)
+transformers==5.12.1
+torch==2.5.1

@@ -1,0 +1,31 @@
+# --- Python / Django ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+*.sqlite3
+backend/staticfiles/
+backend/media/
+
+# --- Node / Frontend ---
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# --- Modelli AI: i PESI NON vanno in git (§200) ---
+# Scaricati al setup via scripts/provision_models.sh
+models/
+*.gguf
+*.safetensors
+*.bin
+
+# --- Tooling / OS ---
+.DS_Store
+.idea/
+.vscode/
+*.log
+.pytest_cache/
+.coverage
+htmlcov/
