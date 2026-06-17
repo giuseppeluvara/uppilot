@@ -25,22 +25,44 @@ _ETICHETTA_SEZIONE = {
     "convenuto": "FASCICOLO DEL CONVENUTO/RICORRENTE",
 }
 
-PROMPT = """Sei un assistente che aiuta un operatore dell'Ufficio per il Processo a redigere una bozza.
+# L'analisi è scomposta in DUE chiamate focalizzate: un modello locale (8B) è molto più
+# affidabile con un compito per volta che dovendo produrre fatto + richieste insieme.
+
+PROMPT_IN_FATTO = """Sei un assistente che aiuta un operatore dell'Ufficio per il Processo a redigere una bozza.
+
+COMPITO: scrivi la sezione "IN FATTO" — una narrazione sintetica e OGGETTIVA dei fatti di causa, in prosa.
 
 REGOLE TASSATIVE:
-- Scrivi solo ciò che è OGGETTIVO e ricavabile dagli atti.
-- NON trarre conclusioni giuridiche definitive. Ogni punto che richiede valutazione o \
-discrezionalità va formulato come domanda all'operatore nel campo "quesiti_aperti".
+- Scrivi solo ciò che è OGGETTIVO e ricavabile dagli atti. Niente valutazioni o conclusioni giuridiche.
 - Usa l'italiano. I dati personali sono già pseudonimizzati (es. [PRIVATE_PERSON_1]): \
 mantienili tali e non inventare nomi reali.
 
+Restituisci ESCLUSIVAMENTE un oggetto JSON: {{"in_fatto": "..."}}
+
+ATTI DEL FASCICOLO (pseudonimizzati):
+{documenti}
+"""
+
+PROMPT_RICHIESTE = """Sei un assistente che aiuta un operatore dell'Ufficio per il Processo.
+
+COMPITO: estrai TUTTE le domande/conclusioni che ciascuna parte rivolge al giudice.
+
+REGOLE TASSATIVE:
+- Elenca SEMPRE almeno la domanda principale di OGNI parte presente nel fascicolo (attore e convenuto).
+- La domanda RICONVENZIONALE è SEMPRE del CONVENUTO: usa parte="convenuto". In generale, la \
+parte è CHI propone la domanda (in favore di chi è formulata), non chi la subisce.
+- NON ripetere la stessa domanda più volte: ogni voce deve essere distinta.
+- Riporta in "testo" cosa chiede la parte, in modo OGGETTIVO (es. "chiede la condanna al pagamento di X").
+- NON trarre conclusioni giuridiche. Ciò che richiede valutazione o discrezionalità va posto come \
+domanda all'operatore nel campo "quesiti_aperti".
+- I dati personali sono già pseudonimizzati: mantienili tali.
+
 Restituisci ESCLUSIVAMENTE un oggetto JSON con questa struttura:
 {{
-  "in_fatto": "narrazione sintetica e oggettiva del fatto, in prosa",
   "richieste": [
     {{
       "parte": "attore" | "convenuto",
-      "testo": "cosa chiede la parte, in modo oggettivo",
+      "testo": "cosa chiede la parte",
       "quesiti_aperti": ["eventuali domande all'operatore su punti discrezionali"]
     }}
   ]
@@ -49,6 +71,26 @@ Restituisci ESCLUSIVAMENTE un oggetto JSON con questa struttura:
 ATTI DEL FASCICOLO (pseudonimizzati):
 {documenti}
 """
+
+# Schema passato a Ollama (format=schema) per VINCOLARE l'output: obbliga la chiave "richieste".
+SCHEMA_RICHIESTE = {
+    "type": "object",
+    "properties": {
+        "richieste": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "parte": {"type": "string", "enum": ["attore", "convenuto"]},
+                    "testo": {"type": "string"},
+                    "quesiti_aperti": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["parte", "testo", "quesiti_aperti"],
+            },
+        }
+    },
+    "required": ["richieste"],
+}
 
 
 def documenti_utilizzabili(lavoro):
@@ -166,29 +208,56 @@ def approfondisci_richiesta(
 
 
 def analizza_lavoro(lavoro, llm: LLMBackend) -> dict:
-    """Esegue l'analisi e restituisce il dizionario {in_fatto, richieste}."""
+    """Esegue l'analisi e restituisce il dizionario {in_fatto, richieste}.
+
+    Due chiamate focalizzate (un compito ciascuna): l'"in fatto" e — separatamente —
+    l'estrazione delle richieste, vincolata da uno schema JSON. Questo rende l'estrazione
+    affidabile anche su fascicoli ampi, dove un modello locale tende a ometterne una.
+    """
     documenti = list(documenti_utilizzabili(lavoro))
     if not documenti:
         raise ValueError(
             "Nessun documento utilizzabile: caricane e accettane almeno uno."
         )
+    blocco = _componi_documenti(documenti)
 
-    prompt = PROMPT.format(documenti=_componi_documenti(documenti))
-    grezzo = llm.generate(prompt, format="json", think=False, temperature=0.2)
-    dati = _estrai_json(grezzo)
+    # 1) Sezione "in fatto".
+    grezzo_fatto = llm.generate(
+        PROMPT_IN_FATTO.format(documenti=blocco), format="json", think=False, temperature=0.2
+    )
+    in_fatto = str(_estrai_json(grezzo_fatto).get("in_fatto", "")).strip()
 
-    # Normalizzazione difensiva dell'output del modello.
-    dati.setdefault("in_fatto", "")
+    # 2) Richieste delle parti (output vincolato dallo schema).
+    grezzo_ric = llm.generate(
+        PROMPT_RICHIESTE.format(documenti=blocco),
+        format=SCHEMA_RICHIESTE,
+        think=False,
+        temperature=0.2,
+    )
+    dati_ric = _estrai_json(grezzo_ric)
+
     richieste = []
-    for r in dati.get("richieste", []):
+    visti: set[tuple[str, str]] = set()
+    for r in dati_ric.get("richieste", []):
+        testo = str(r.get("testo", "")).strip()
+        if not testo:
+            continue
         parte = str(r.get("parte", "")).lower()
-        parte = "convenuto" if "conven" in parte or "ricorr" in parte else "attore"
+        # "riconvenzional" nel testo → è una domanda del convenuto, a prescindere
+        # dall'etichetta del modello (che talvolta sbaglia l'attribuzione).
+        if "conven" in parte or "ricorr" in parte or "riconvenzional" in testo.lower():
+            parte = "convenuto"
+        else:
+            parte = "attore"
+        chiave = (parte, testo.casefold())
+        if chiave in visti:  # dedup di richieste ripetute dal modello
+            continue
+        visti.add(chiave)
         richieste.append(
             {
                 "parte": parte,
-                "testo": str(r.get("testo", "")).strip(),
+                "testo": testo,
                 "quesiti_aperti": [str(q) for q in r.get("quesiti_aperti", []) if q],
             }
         )
-    dati["richieste"] = richieste
-    return dati
+    return {"in_fatto": in_fatto, "richieste": richieste}

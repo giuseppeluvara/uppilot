@@ -19,9 +19,20 @@ from functools import lru_cache
 from fastapi import FastAPI
 from pydantic import BaseModel
 
+# Import al top-level (NON lazy dentro la funzione): transformers usa il lazy-loading
+# e l'import concorrente da più thread alla prima richiesta può fallire con un
+# ImportError transitorio ("cannot import name 'pipeline'"). Importando qui, il
+# modulo è inizializzato una volta sola all'avvio, single-thread.
+from transformers import pipeline
+
 MODEL_NAME = os.environ.get("PRIVACY_FILTER_MODEL", "openai/privacy-filter")
 
 app = FastAPI(title="UPPilot Privacy Filter")
+
+# Una sola inferenza alla volta: su CPU più richieste concorrenti vanno in
+# contesa sui core (torch) e i tempi esplodono. Serializzando, ogni richiesta
+# resta ~1s anche con più documenti caricati insieme.
+_INFER_LOCK = threading.Lock()
 
 # Una sola inferenza alla volta: su CPU più richieste concorrenti vanno in
 # contesa sui core (torch) e i tempi esplodono. Serializzando, ogni richiesta
@@ -40,14 +51,18 @@ class AnonymizeResponse(BaseModel):
 
 @lru_cache(maxsize=1)
 def get_pipeline():
-    """Carica il modello una sola volta (lazy, al primo /anonymize)."""
-    from transformers import pipeline
-
+    """Costruisce il modello una sola volta (cache LRU)."""
     return pipeline(
         "token-classification",
         model=MODEL_NAME,
         aggregation_strategy="simple",
     )
+
+
+@app.on_event("startup")
+def _prewarm() -> None:
+    """Costruisce il modello all'avvio (single-thread): niente race né lentezza al primo /anonymize."""
+    get_pipeline()
 
 
 @app.get("/healthz")
@@ -62,6 +77,15 @@ _RE_PII = [
     ("IBAN", re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{10,30}\b")),
     ("EMAIL", re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")),
     ("PARTITA_IVA", re.compile(r"\b\d{11}\b")),
+    # Denominazioni societarie: il modello PII non le coglie in modo affidabile,
+    # lasciando la RAGIONE SOCIALE delle parti in chiaro. Cattura "<Nome> + forma".
+    (
+        "ORGANIZZAZIONE",
+        re.compile(
+            r"\b[A-ZÀ-Ù][\wÀ-ù'&.\-]*(?:\s+[A-ZÀ-Ù][\wÀ-ù'&.\-]*){0,3}?\s+"
+            r"(?:S\.?r\.?l\.?s?|S\.?p\.?[Aa]|S\.?n\.?c|S\.?a\.?s|S\.?c\.?[Aa]\.?r\.?l)\.?",
+        ),
+    ),
 ]
 
 

@@ -57,8 +57,9 @@ def test_analisi_usa_solo_testo_pseudonimizzato(lavoro):
     # Vincolo §119: nel prompt entra SOLO il pseudonimizzato, mai l'originale.
     assert "[PRIVATE_PERSON_1]" in llm.ultimo_prompt
     assert "ORIGINALE" not in llm.ultimo_prompt
-    # Output JSON forzato e thinking disattivato.
-    assert llm.ultimi_opts.get("format") == "json"
+    # L'estrazione richieste (ultima chiamata) vincola l'output con uno schema JSON,
+    # con thinking disattivato.
+    assert isinstance(llm.ultimi_opts.get("format"), dict)
     assert llm.ultimi_opts.get("think") is False
 
 
