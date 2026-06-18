@@ -84,14 +84,40 @@ Monolite **Django + DRF** che comunica con i servizi AI **solo via HTTP**, dietr
 importata in-process nell'app Django.
 
 ```
-React SPA ──REST──> Django + DRF ──HTTP──> Ollama (GLM-OCR + LLM locali)
+React SPA ──REST──> Django + DRF ──HTTP──> Ollama (GLM-OCR + LLM + embeddings locali)
                           │      ──HTTP──> Privacy Filter (openai/privacy-filter)
-                          ├──> Postgres + pgvector   (pgvector pronto, non usato in M1)
-                          └──> Redis + Celery (OCR/generazione asincroni)
+                          │      ──HTTPS─> LLM commerciale (SDK Anthropic, opt-in)
+                          ├──> Postgres + pgvector   (RAG: ricerca semantica sul corpus)
+                          └──> Redis + Celery (OCR / anonimizzazione / analisi asincrone)
 ```
 
-Dettaglio di scope e milestone: vedi `PROMPT_INIZIALE_assistente_bozze_upp.md`.
+Stack: **Django 5 + DRF**, **Celery + Redis**, **Postgres + pgvector**, **React + TypeScript +
+Vite + shadcn/ui**. Dettaglio di scope e milestone: vedi `PROMPT_INIZIALE_assistente_bozze_upp.md`.
+
+---
+
+## Funzionalità
+
+**M1** — login e gestione lavori; upload nelle 3 sezioni (attore / convenuto / generici),
+estrazione testo da PDF nativo + **OCR** (GLM-OCR) con flag di bassa confidenza; **Privacy Filter
+obbligatorio** (pseudonimizzazione) con flusso di verifica/accettazione e avviso GDPR persistente;
+analisi LLM locale: sintesi **"in fatto"** + estrazione strutturata delle **richieste** delle parti;
+editor; archivio storico.
+
+**M2** — ragionamento **"in diritto"** per richiesta (onere probatorio, non contestazioni, allegati,
+quesiti); **export `.docx`** (anche versione "in chiaro" de-pseudonimizzata); **ricerca giuridica
+"spunti"** (web o incolla manuale; la query esce sempre pseudonimizzata); **LLM commerciali opt-in**
+(SDK Anthropic); **RAG** su pgvector (corpus di normativa/giurisprudenza, ricerca semantica a
+supporto dell'analisi "in diritto").
+
+**Affinamenti** — etichette PII italiane (C.F. / P.IVA / IBAN / PEC / ragioni sociali); resilienza
+dell'anonimizzazione (retry automatico + "Riprova" per documento); placeholder canonici per lavoro
+(coerenti tra documenti, abilitano l'export in chiaro); estrazione richieste robusta (due chiamate
+LLM focalizzate + schema vincolante); editor completo (motivazione "in diritto" + P.Q.M.); anteprima
+documenti; ricerca nell'archivio; corpus con upload file e categorie; export `.docx` con stile
+professionale; tema chiaro/scuro e upload multiplo drag & drop.
 
 ## Stato
 
-**M1 — fondamenta** in costruzione: scaffolding, `docker-compose`, modello dati, interfacce AI.
+**M1 + M2 completi**, validati end-to-end (anche su un fascicolo d'appalto reale). Suite backend
+verde (~58 test). Per l'uso operativo passo per passo vedi la **[Guida operativa](GUIDA.md)**.
