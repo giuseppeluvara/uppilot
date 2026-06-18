@@ -32,3 +32,6 @@ htmlcov/
 
 # Documenti di riferimento forniti (fascicoli/sample) — non versionati
 docs/sample-output/
+
+# Fascicoli di test generati — non versionati
+fascicolo-test/
