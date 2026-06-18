@@ -157,3 +157,76 @@ def estrai_grafo_corpus(documento, llm: LLMBackend) -> None:
         temperature=0.2,
     )
     materializza(_estrai_json(grezzo), documento=documento)
+
+
+# --- Casi (fascicoli) anonimizzati -----------------------------------------
+
+PROMPT_CASO = """Dal testo seguente (analisi di un caso, GIÀ PSEUDONIMIZZATA) elenca i \
+riferimenti normativi e gli istituti giuridici rilevanti che il caso tocca (etichette \
+concise, es. "Art. 1460 c.c.", "Eccezione di inadempimento"). Massimo circa 8.
+
+Restituisci SOLO JSON: {{"riferimenti": ["...", "..."]}}
+
+TESTO:
+{testo}
+"""
+
+SCHEMA_CASO = {
+    "type": "object",
+    "properties": {"riferimenti": {"type": "array", "items": {"type": "string"}}},
+    "required": ["riferimenti"],
+}
+
+_RE_RIFERIMENTO = re.compile(r"\bart\.?\b|c\.?c\.?|c\.?p\.?c\.?|cost", re.IGNORECASE)
+
+
+def _testo_analisi(lavoro) -> tuple[str, str]:
+    """Testo pseudonimizzato dell'analisi (in fatto + richieste) e l'in-fatto per la sintesi."""
+    from apps.analisi.models import Bozza
+
+    bozza = Bozza.objects.filter(lavoro=lavoro).first()
+    in_fatto = bozza.in_fatto if bozza else ""
+    parti: list[str] = [in_fatto] if in_fatto else []
+    for r in lavoro.richieste.all():
+        if r.testo:
+            parti.append(r.testo)
+        if r.onere_probatorio:
+            parti.append(r.onere_probatorio)
+        parti.extend(r.quesiti_aperti or [])
+    return "\n".join(parti), in_fatto
+
+
+def estrai_grafo_lavoro(lavoro, llm: LLMBackend) -> None:
+    """Crea un nodo-CASO anonimo e lo collega ai riferimenti/istituti che tocca.
+
+    Privacy: lavora SOLO su testo pseudonimizzato; l'etichetta del nodo è non
+    identificante ("Fascicolo #id"), la sintesi è l'in-fatto (già pseudonimizzato).
+    """
+    testo, in_fatto = _testo_analisi(lavoro)
+    if not testo.strip():
+        return
+    grezzo = llm.generate(
+        PROMPT_CASO.format(testo=testo[:_MAX_CARATTERI]),
+        format=SCHEMA_CASO,
+        think=False,
+        temperature=0.2,
+    )
+    dati = _estrai_json(grezzo)
+
+    caso = upsert_nodo(
+        f"Fascicolo #{lavoro.id}",
+        tipo=Nodo.Tipo.CASO,
+        sintesi=in_fatto[:240],
+        lavoro=lavoro,
+        chiave=f"caso:{lavoro.id}",
+    )
+    if not caso:
+        return
+    for ref in dati.get("riferimenti", []):
+        etichetta = str(ref).strip()
+        if not etichetta:
+            continue
+        tipo = Nodo.Tipo.RIFERIMENTO if _RE_RIFERIMENTO.search(etichetta) else Nodo.Tipo.CONCETTO
+        nodo = upsert_nodo(etichetta, tipo)
+        if nodo and nodo.id != caso.id:
+            Arco.objects.get_or_create(da=caso, a=nodo, tipo=Arco.Tipo.APPLICA)
