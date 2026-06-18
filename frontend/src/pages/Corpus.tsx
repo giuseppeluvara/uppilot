@@ -1,13 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Loader2, Plus, Search } from "lucide-react";
+import { Layers, Loader2, Plus, Search, Trash2 } from "lucide-react";
 import { api, ApiError } from "@/api";
-import type { DocumentoCorpus, RisultatoCorpus } from "@/types";
+import type { DocumentoCorpus, FrammentoCorpus, RisultatoCorpus } from "@/types";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Table,
@@ -38,6 +45,9 @@ export function Corpus() {
   const [query, setQuery] = useState("");
   const [risultati, setRisultati] = useState<RisultatoCorpus[] | null>(null);
   const [cercando, setCercando] = useState(false);
+  // Vista frammenti di un documento del corpus.
+  const [frammentiDi, setFrammentiDi] = useState<DocumentoCorpus | null>(null);
+  const [frammenti, setFrammenti] = useState<FrammentoCorpus[] | null>(null);
 
   const carica = useCallback(async () => {
     try {
@@ -46,6 +56,38 @@ export function Corpus() {
       toast.error(err instanceof ApiError ? err.message : "Errore di caricamento.");
     }
   }, []);
+
+  async function apriFrammenti(d: DocumentoCorpus) {
+    setFrammentiDi(d);
+    setFrammenti(null);
+    try {
+      setFrammenti(await api.get<FrammentoCorpus[]>(`/corpus/${d.id}/frammenti/`));
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Errore di caricamento.");
+    }
+  }
+
+  async function eliminaFrammento(id: number) {
+    try {
+      await api.del(`/corpus/frammenti/${id}/`);
+      setFrammenti((f) => (f ? f.filter((x) => x.id !== id) : f));
+      toast.success("Frammento eliminato");
+      await carica();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Operazione non riuscita.");
+    }
+  }
+
+  async function eliminaDocumento(d: DocumentoCorpus) {
+    if (!confirm(`Eliminare "${d.titolo}" e tutti i suoi frammenti?`)) return;
+    try {
+      await api.del(`/corpus/${d.id}/`);
+      toast.success("Documento eliminato dal corpus");
+      await carica();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Operazione non riuscita.");
+    }
+  }
 
   useEffect(() => {
     carica();
@@ -222,7 +264,8 @@ export function Corpus() {
                     <TableHead>Categoria</TableHead>
                     <TableHead>Fonte</TableHead>
                     <TableHead>Stato</TableHead>
-                    <TableHead className="text-right">Frammenti</TableHead>
+                    <TableHead>Frammenti</TableHead>
+                    <TableHead className="w-0" />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -238,7 +281,29 @@ export function Corpus() {
                         <TableCell>
                           <Badge variant={st.variant}>{st.label}</Badge>
                         </TableCell>
-                        <TableCell className="text-right">{d.n_frammenti}</TableCell>
+                        <TableCell>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 gap-1"
+                            disabled={!d.n_frammenti}
+                            onClick={() => apriFrammenti(d)}
+                          >
+                            <Layers className="size-3.5" />
+                            {d.n_frammenti}
+                          </Button>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-7 text-destructive"
+                            aria-label="Elimina documento"
+                            onClick={() => eliminaDocumento(d)}
+                          >
+                            <Trash2 className="size-4" />
+                          </Button>
+                        </TableCell>
                       </TableRow>
                     );
                   })}
@@ -248,6 +313,46 @@ export function Corpus() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={frammentiDi !== null} onOpenChange={(o) => !o && setFrammentiDi(null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="truncate">Frammenti — {frammentiDi?.titolo}</DialogTitle>
+          </DialogHeader>
+          {frammenti === null ? (
+            <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" />
+              Caricamento…
+            </div>
+          ) : frammenti.length === 0 ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">
+              Nessun frammento (eliminati tutti o non ancora indicizzato).
+            </p>
+          ) : (
+            <ScrollArea className="max-h-[60vh]">
+              <div className="grid gap-2 pr-3">
+                {frammenti.map((f) => (
+                  <div key={f.id} className="rounded-lg border p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <Badge variant="secondary">#{f.ordine + 1}</Badge>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-7 text-destructive"
+                        aria-label="Elimina frammento"
+                        onClick={() => eliminaFrammento(f.id)}
+                      >
+                        <Trash2 className="size-4" />
+                      </Button>
+                    </div>
+                    <p className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">{f.testo}</p>
+                  </div>
+                ))}
+              </div>
+            </ScrollArea>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

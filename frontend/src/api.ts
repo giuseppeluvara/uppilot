@@ -61,6 +61,7 @@ export const api = {
   get: <T>(p: string) => request<T>(p),
   post: <T>(p: string, json?: unknown) => request<T>(p, { method: "POST", json }),
   patch: <T>(p: string, json?: unknown) => request<T>(p, { method: "PATCH", json }),
+  del: <T>(p: string) => request<T>(p, { method: "DELETE" }),
   upload: <T>(p: string, form: FormData) => request<T>(p, { method: "POST", form }),
   download,
 };

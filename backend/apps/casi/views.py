@@ -1,3 +1,8 @@
+import os
+import zipfile
+from io import BytesIO
+
+from django.http import HttpResponse
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, MultiPartParser
@@ -34,6 +39,28 @@ class LavoroViewSet(viewsets.ModelViewSet):
             stato_accettazione=Documento.StatoAccettazione.ACCETTATO_SENZA_VERIFICA
         )
         return Response({"accettati": aggiornati})
+
+    @action(detail=True, methods=["get"], url_path="documenti-zip")
+    def documenti_zip(self, request, pk=None):
+        """Scarica in un unico .zip tutti i documenti caricati del lavoro."""
+        lavoro = self.get_object()
+        buffer = BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            usati: set[str] = set()
+            for doc in Documento.objects.filter(sezione__lavoro=lavoro).select_related("sezione"):
+                if not doc.file:
+                    continue
+                nome = os.path.basename(doc.file.name)
+                # Evita collisioni di nome (cartella per sezione + id se serve).
+                arc = f"{doc.sezione.tipo}/{nome}"
+                if arc in usati:
+                    arc = f"{doc.sezione.tipo}/{doc.id}_{nome}"
+                usati.add(arc)
+                with doc.file.open("rb") as fh:
+                    zf.writestr(arc, fh.read())
+        resp = HttpResponse(buffer.getvalue(), content_type="application/zip")
+        resp["Content-Disposition"] = f'attachment; filename="documenti_lavoro_{lavoro.id}.zip"'
+        return resp
 
 
 class DocumentoViewSet(

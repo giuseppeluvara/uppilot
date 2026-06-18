@@ -89,6 +89,12 @@ export interface DocumentoCorpus {
   created_at: string;
 }
 
+export interface FrammentoCorpus {
+  id: number;
+  ordine: number;
+  testo: string;
+}
+
 export interface RisultatoCorpus {
   documento_id: number;
   titolo: string;

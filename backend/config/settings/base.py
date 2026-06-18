@@ -119,4 +119,8 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
+# Consente l'anteprima dei documenti in iframe same-origin (la SPA li incorpora
+# dalla propria origine via proxy). Default Django = DENY, che bloccherebbe l'embed.
+X_FRAME_OPTIONS = "SAMEORIGIN"
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"

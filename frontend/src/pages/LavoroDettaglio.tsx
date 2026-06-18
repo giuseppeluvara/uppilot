@@ -179,7 +179,24 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
       </div>
 
       <section className="grid gap-4">
-        <h2 className="text-lg font-semibold tracking-tight">Documenti del fascicolo</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold tracking-tight">Documenti del fascicolo</h2>
+          {lavoro.sezioni.some((s) => s.documenti.length > 0) && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                azione(
+                  () => api.download(`/lavori/${id}/documenti-zip/`, `documenti_lavoro_${id}.zip`),
+                  "Documenti scaricati",
+                )
+              }
+            >
+              <Download />
+              Scarica tutti
+            </Button>
+          )}
+        </div>
         {lavoro.sezioni.map((sez) => (
           <SezioneCard
             key={sez.id}
@@ -404,6 +421,11 @@ function SezioneCard({
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-sm font-medium">{baseName(d.file)}</span>
                   <AnteprimaDocumento doc={d} />
+                  <Button asChild variant="ghost" size="icon" className="size-7" aria-label="Scarica">
+                    <a href={d.file} download={baseName(d.file)}>
+                      <Download className="size-4" />
+                    </a>
+                  </Button>
                   <StatoOcr doc={d} />
                   {d.stato_estrazione === "completato" && d.stato_anonimizzazione === "in_corso" && (
                     <Badge variant="secondary" className="gap-1">

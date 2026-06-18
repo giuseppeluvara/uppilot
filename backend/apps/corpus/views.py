@@ -1,3 +1,4 @@
+from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.generics import ListAPIView
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -6,7 +7,7 @@ from rest_framework.views import APIView
 
 from ai.factory import get_embedding_backend
 
-from .models import DocumentoCorpus
+from .models import DocumentoCorpus, FrammentoCorpus
 from .serializers import DocumentoCorpusSerializer
 from .services import cerca
 from .tasks import indicizza_documento_task
@@ -73,6 +74,37 @@ class IngestView(APIView):
         return Response(
             DocumentoCorpusSerializer(doc).data, status=status.HTTP_202_ACCEPTED
         )
+
+
+class CorpusDocumentoView(APIView):
+    """Eliminazione di un documento del corpus (cascade sui suoi frammenti)."""
+
+    def delete(self, request, pk):
+        doc = get_object_or_404(DocumentoCorpus, pk=pk)
+        doc.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class FrammentiView(APIView):
+    """Elenco dei frammenti (contenuto) di un documento del corpus."""
+
+    def get(self, request, pk):
+        doc = get_object_or_404(DocumentoCorpus, pk=pk)
+        return Response(
+            [
+                {"id": f.id, "ordine": f.ordine, "testo": f.testo}
+                for f in doc.frammenti.all()
+            ]
+        )
+
+
+class FrammentoView(APIView):
+    """Eliminazione di un singolo frammento indicizzato."""
+
+    def delete(self, request, pk):
+        frammento = get_object_or_404(FrammentoCorpus, pk=pk)
+        frammento.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class CercaView(APIView):
