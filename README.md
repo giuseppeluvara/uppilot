@@ -114,6 +114,12 @@ quesiti); **export `.docx`** (anche versione "in chiaro" de-pseudonimizzata); **
 (SDK Anthropic); **RAG** su pgvector (corpus di normativa/giurisprudenza, ricerca semantica a
 supporto dell'analisi "in diritto").
 
+**Grafo della conoscenza** — mappa navigabile di istituti, riferimenti normativi e **casi
+anonimizzati**, costruita dal **LLM locale** sul corpus e sull'analisi (solo testo pseudonimizzato).
+Visualizzazione interattiva (community detection a colori, ForceAtlas2) con filtri, ricerca e
+pannello di dettaglio. Implementazione nativa ispirata a `nashsu/llm_wiki` (nessun codice GPL; solo
+librerie viz MIT). È un ausilio alla consultazione, non una fonte di conclusioni (§1).
+
 **Affinamenti** — etichette PII italiane (C.F. / P.IVA / IBAN / PEC / ragioni sociali); resilienza
 dell'anonimizzazione (retry automatico + "Riprova" per documento); placeholder canonici per lavoro
 (coerenti tra documenti, abilitano l'export in chiaro); estrazione richieste robusta (due chiamate
