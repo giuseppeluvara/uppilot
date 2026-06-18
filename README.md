@@ -1,5 +1,9 @@
 # UPPilot
 
+[![CI](https://github.com/giuseppeluvara/uppilot/actions/workflows/ci.yml/badge.svg)](https://github.com/giuseppeluvara/uppilot/actions/workflows/ci.yml)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+
 > Assistente **open source, local-first e dockerizzato** alla redazione di **bozze di
 > sentenza/parere** per gli **Uffici per il Processo (UPP)** del Ministero della Giustizia.
 
@@ -121,3 +125,11 @@ professionale; tema chiaro/scuro e upload multiplo drag & drop.
 
 **M1 + M2 completi**, validati end-to-end (anche su un fascicolo d'appalto reale). Suite backend
 verde (~58 test). Per l'uso operativo passo per passo vedi la **[Guida operativa](GUIDA.md)**.
+
+---
+
+## Contribuire
+
+Contributi benvenuti — leggi prima **[CONTRIBUTING.md](CONTRIBUTING.md)** (principi non negoziabili
+su privacy e §1, setup, test, regole frontend). La **CI** esegue test backend e build frontend a ogni
+push e PR. Licenza: **AGPL-3.0-or-later**.
