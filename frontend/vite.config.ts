@@ -16,6 +16,7 @@ export default defineConfig({
     // Proxy verso il backend Django in dev.
     proxy: {
       "/api": "http://backend:8000",
+      "/media": "http://backend:8000",
       "/healthz": "http://backend:8000",
     },
   },

@@ -5,6 +5,13 @@ from .models import Documento, Lavoro, SezioneDocumenti
 
 class DocumentoSerializer(serializers.ModelSerializer):
     utilizzabile = serializers.BooleanField(read_only=True)
+    # URL RELATIVO (/media/...) anziché assoluto: l'assoluto incorporerebbe
+    # l'hostname interno del container (backend:8000), non raggiungibile dal
+    # browser. Relativo, l'anteprima resta nell'origine della SPA e passa dal proxy.
+    file = serializers.SerializerMethodField()
+
+    def get_file(self, obj):
+        return obj.file.url if obj.file else None
 
     class Meta:
         model = Documento
