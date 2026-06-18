@@ -496,7 +496,7 @@ function AnteprimaDocumento({ doc }: { doc: Documento }) {
           <Eye className="size-4" />
         </Button>
       </DialogTrigger>
-      <DialogContent className="flex h-[90vh] w-[95vw] max-w-5xl flex-col gap-3">
+      <DialogContent className="flex h-[90vh] w-[95vw] flex-col gap-3 sm:max-w-5xl">
         <DialogHeader>
           <DialogTitle className="truncate pr-8">{baseName(url)}</DialogTitle>
         </DialogHeader>

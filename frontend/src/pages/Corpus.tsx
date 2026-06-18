@@ -315,9 +315,9 @@ export function Corpus() {
       </Card>
 
       <Dialog open={frammentiDi !== null} onOpenChange={(o) => !o && setFrammentiDi(null)}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="flex max-h-[85vh] w-[95vw] flex-col gap-3 sm:max-w-3xl">
           <DialogHeader>
-            <DialogTitle className="truncate">Frammenti — {frammentiDi?.titolo}</DialogTitle>
+            <DialogTitle className="truncate pr-8">Frammenti — {frammentiDi?.titolo}</DialogTitle>
           </DialogHeader>
           {frammenti === null ? (
             <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
@@ -329,7 +329,7 @@ export function Corpus() {
               Nessun frammento (eliminati tutti o non ancora indicizzato).
             </p>
           ) : (
-            <ScrollArea className="max-h-[60vh]">
+            <ScrollArea className="min-h-0 flex-1">
               <div className="grid gap-2 pr-3">
                 {frammenti.map((f) => (
                   <div key={f.id} className="rounded-lg border p-3">
