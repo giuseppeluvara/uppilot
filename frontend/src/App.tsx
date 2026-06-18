@@ -11,6 +11,7 @@ import { Login } from "@/pages/Login";
 import { Lavori } from "@/pages/Lavori";
 import { LavoroDettaglio } from "@/pages/LavoroDettaglio";
 import { Corpus } from "@/pages/Corpus";
+import { Conoscenza } from "@/pages/Conoscenza";
 
 const WARNING_GDPR =
   "Il Privacy Filter esegue pseudonimizzazione, non anonimizzazione: ai fini del GDPR il dato " +
@@ -85,6 +86,7 @@ export function App() {
                 <nav className="flex items-center gap-1">
                   <NavLink to="/">Lavori</NavLink>
                   <NavLink to="/corpus">Corpus</NavLink>
+                  <NavLink to="/conoscenza">Conoscenza</NavLink>
                 </nav>
               )}
             </div>
@@ -116,6 +118,7 @@ export function App() {
               <Route path="/" element={<Lavori />} />
               <Route path="/lavori/:id" element={<DettaglioRoute />} />
               <Route path="/corpus" element={<Corpus />} />
+              <Route path="/conoscenza" element={<Conoscenza />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           )}

@@ -18,6 +18,7 @@ urlpatterns = [
     path("api/", include("apps.analisi.urls")),
     path("api/", include("apps.storico.urls")),
     path("api/", include("apps.corpus.urls")),
+    path("api/", include("apps.conoscenza.urls")),
 ]
 
 # In sviluppo Django serve i file caricati (per l'anteprima dei documenti).

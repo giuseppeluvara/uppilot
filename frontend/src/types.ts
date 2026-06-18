@@ -95,6 +95,34 @@ export interface FrammentoCorpus {
   testo: string;
 }
 
+export interface NodoGrafo {
+  id: number;
+  tipo: "concetto" | "riferimento" | "caso";
+  etichetta: string;
+  sintesi: string;
+  documento: number | null;
+  lavoro: number | null;
+}
+
+export interface ArcoGrafo {
+  id: number;
+  da: number;
+  a: number;
+  tipo: "cita" | "correlato" | "in_contrasto" | "applica";
+  peso: number;
+}
+
+export interface Grafo {
+  nodi: NodoGrafo[];
+  archi: ArcoGrafo[];
+}
+
+export interface StatoGrafo {
+  in_corso: boolean;
+  n_nodi: number;
+  n_archi: number;
+}
+
 export interface RisultatoCorpus {
   documento_id: number;
   titolo: string;

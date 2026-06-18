@@ -26,6 +26,7 @@ INSTALLED_APPS = [
     "apps.analisi",
     "apps.storico",
     "apps.corpus",
+    "apps.conoscenza",
 ]
 
 MIDDLEWARE = [
