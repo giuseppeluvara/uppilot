@@ -496,24 +496,22 @@ function AnteprimaDocumento({ doc }: { doc: Documento }) {
           <Eye className="size-4" />
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="flex h-[90vh] w-[95vw] max-w-5xl flex-col gap-3">
         <DialogHeader>
-          <DialogTitle className="truncate">{baseName(url)}</DialogTitle>
+          <DialogTitle className="truncate pr-8">{baseName(url)}</DialogTitle>
         </DialogHeader>
-        {immagine ? (
-          <img
-            src={url}
-            alt={baseName(url)}
-            className="max-h-[70vh] w-full rounded-md border object-contain"
-          />
-        ) : (
-          <iframe src={url} title={baseName(url)} className="h-[70vh] w-full rounded-md border" />
-        )}
+        <div className="min-h-0 flex-1 overflow-hidden rounded-md border">
+          {immagine ? (
+            <img src={url} alt={baseName(url)} className="h-full w-full object-contain" />
+          ) : (
+            <iframe src={url} title={baseName(url)} className="h-full w-full" />
+          )}
+        </div>
         <a
           href={url}
           target="_blank"
           rel="noreferrer"
-          className="inline-flex items-center gap-1 text-sm text-primary underline-offset-4 hover:underline"
+          className="inline-flex shrink-0 items-center gap-1 text-sm text-primary underline-offset-4 hover:underline"
         >
           <ExternalLink className="size-3" />
           Apri in una nuova scheda
