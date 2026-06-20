@@ -52,6 +52,36 @@ def test_commercial_generate_ignora_opts_ollama():
     assert isinstance(backend, LLMBackend)
 
 
+class _GeminiModels:
+    def __init__(self):
+        self.kwargs = None
+
+    def generate_content(self, **kwargs):
+        self.kwargs = kwargs
+
+        class _R:
+            text = '{"in_fatto": "x"}'
+
+        return _R()
+
+
+class _FakeGemini:
+    def __init__(self):
+        self.models = _GeminiModels()
+
+
+def test_commercial_gemini_generate():
+    fake = _FakeGemini()
+    backend = CommercialLLMBackend("gemini", "k", client=fake)
+
+    out = backend.generate("ciao", format="json")
+
+    assert out == '{"in_fatto": "x"}'
+    assert backend.model == "gemini-2.5-flash"  # default Gemini
+    cfg = fake.models.kwargs["config"]
+    assert getattr(cfg, "response_mime_type", None) == "application/json"
+
+
 def test_provider_non_supportato():
     with pytest.raises(ValueError):
         CommercialLLMBackend("openai", "k", "gpt", client=_FakeAnthropic())
