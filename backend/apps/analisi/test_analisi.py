@@ -78,6 +78,30 @@ def test_analisi_documento_non_accettato_escluso(lavoro):
         analizza_lavoro(lavoro, FakeLLM({"in_fatto": "", "richieste": []}))
 
 
+def test_in_fatto_da_grezzo_salva_json_troncato():
+    from apps.analisi.services import _in_fatto_da_grezzo
+
+    assert "Le parti" in _in_fatto_da_grezzo('{"in_fatto": "Le parti hanno stipulato e poi')
+    assert _in_fatto_da_grezzo('{"in_fatto":"X"}') == "X"
+    assert _in_fatto_da_grezzo("nessun json") == ""
+
+
+def test_analisi_resiliente_a_json_malformato(lavoro):
+    """Un JSON malformato del modello locale NON deve far fallire l'analisi."""
+    _doc_accettato(lavoro, SezioneDocumenti.Tipo.ATTORE, "[PRIVATE_PERSON_1] chiede X.")
+
+    class MalformedLLM:
+        def generate(self, prompt, **opts):
+            return '{"in_fatto": "Testo troncato'
+
+        def stream(self, prompt, **opts):
+            yield self.generate(prompt, **opts)
+
+    dati = analizza_lavoro(lavoro, MalformedLLM())
+    assert "Testo troncato" in dati["in_fatto"]  # salvato dal recupero
+    assert dati["richieste"] == []  # richieste malformate → lista vuota, niente crash
+
+
 def test_task_persiste_bozza_richieste_e_transiziona(lavoro, monkeypatch):
     _doc_accettato(
         lavoro, SezioneDocumenti.Tipo.ATTORE, "[PRIVATE_PERSON_1] chiede la risoluzione."

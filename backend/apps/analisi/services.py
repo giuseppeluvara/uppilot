@@ -139,6 +139,27 @@ def _estrai_json(grezzo: str) -> dict:
         return json.loads(grezzo[inizio : fine + 1])
 
 
+def _in_fatto_da_grezzo(grezzo: str) -> str:
+    """Estrae l'in-fatto in modo RESILIENTE: salva il testo anche da JSON troncato.
+
+    Il modello locale (8B) a volte produce JSON malformato/troncato ("Unterminated
+    string"): in quel caso, anziché far fallire tutta l'analisi, recuperiamo il
+    valore di "in_fatto" col regex.
+    """
+    grezzo = re.sub(r"<think>.*?</think>", "", grezzo, flags=re.DOTALL).strip()
+    try:
+        return str(_estrai_json(grezzo).get("in_fatto", "")).strip()
+    except (ValueError, json.JSONDecodeError):
+        pass
+    m = re.search(r'"in_fatto"\s*:\s*"(.*)', grezzo, flags=re.DOTALL)
+    if not m:
+        return ""
+    val = m.group(1)
+    # Taglia un'eventuale coda JSON e gli apici, poi de-escape minimale.
+    val = re.sub(r'"\s*}\s*$', "", val.strip()).rstrip().rstrip('"')
+    return val.replace("\\n", "\n").replace('\\"', '"').replace("\\t", "\t").strip()
+
+
 PROMPT_IN_DIRITTO = """Sei un assistente che aiuta un operatore dell'Ufficio per il Processo \
 nell'analisi "in diritto" di UNA singola richiesta di parte.
 
@@ -241,16 +262,20 @@ def analizza_lavoro(lavoro, llm: LLMBackend) -> dict:
         think=False,
         temperature=0.2,
     )
-    in_fatto = str(_estrai_json(grezzo_fatto).get("in_fatto", "")).strip()
+    in_fatto = _in_fatto_da_grezzo(grezzo_fatto)
 
-    # 2) Richieste delle parti (output vincolato dallo schema).
+    # 2) Richieste delle parti (output vincolato dallo schema). Resiliente: un JSON
+    # malformato del modello locale non deve far fallire l'intera analisi.
     grezzo_ric = llm.generate(
         PROMPT_RICHIESTE.format(documenti=blocco),
         format=SCHEMA_RICHIESTE,
         think=False,
         temperature=0.2,
     )
-    dati_ric = _estrai_json(grezzo_ric)
+    try:
+        dati_ric = _estrai_json(grezzo_ric)
+    except (ValueError, json.JSONDecodeError):
+        dati_ric = {"richieste": []}
 
     richieste = []
     visti: set[tuple[str, str]] = set()

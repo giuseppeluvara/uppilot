@@ -53,7 +53,6 @@ const TITOLO_SEZIONE: Record<Sezione["tipo"], string> = {
 };
 
 const baseName = (p: string) => decodeURIComponent(p.split("/").pop() || p);
-const isTerminale = (s: string) => s === "completata" || s === "errore";
 
 type Pending = { analisi?: boolean; approf?: boolean; ricerca?: boolean };
 
@@ -87,13 +86,16 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
     carica();
   }, [carica]);
 
-  // Quando un'operazione raggiunge uno stato terminale, sgancia il "pending".
+  // Sgancia il "pending" ottimistico quando il SERVER mostra "in_corso" (si è
+  // allineato: da qui in poi è lo stato reale a tenere il tasto disabilitato).
+  // NON sganciare su uno stato terminale: rilanciando da "completata" il refetch
+  // immediato mostra ancora il vecchio "completata" e ri-abiliterebbe il tasto.
   useEffect(() => {
     if (!lavoro) return;
     setPending((p) => ({
-      analisi: isTerminale(lavoro.analisi_stato) ? false : p.analisi,
-      approf: isTerminale(lavoro.approfondimento_stato) ? false : p.approf,
-      ricerca: isTerminale(lavoro.ricerca_stato) ? false : p.ricerca,
+      analisi: lavoro.analisi_stato === "in_corso" ? false : p.analisi,
+      approf: lavoro.approfondimento_stato === "in_corso" ? false : p.approf,
+      ricerca: lavoro.ricerca_stato === "in_corso" ? false : p.ricerca,
     }));
   }, [lavoro]);
 
@@ -141,7 +143,14 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
     async (chiave: keyof Pending, fn: () => Promise<unknown>, ok: string) => {
       setPending((p) => ({ ...p, [chiave]: true }));
       const esito = await azione(fn, ok);
-      if (!esito) setPending((p) => ({ ...p, [chiave]: false }));
+      if (!esito) {
+        setPending((p) => ({ ...p, [chiave]: false }));
+        return;
+      }
+      // Sicurezza: se entro 30s il server non ha mostrato "in_corso", sgancia il
+      // pending (se nel frattempo è davvero in corso, lo stato reale tiene comunque
+      // il tasto disabilitato; questo evita solo che resti bloccato in casi anomali).
+      window.setTimeout(() => setPending((p) => ({ ...p, [chiave]: false })), 30000);
     },
     [azione],
   );
