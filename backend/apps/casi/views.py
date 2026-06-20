@@ -98,6 +98,22 @@ class LavoroViewSet(viewsets.ModelViewSet):
         lavoro.save(update_fields=["modello_testo", "updated_at"])
         return Response(LavoroSerializer(lavoro).data)
 
+    @action(detail=True, methods=["post"], url_path="estrai-modello")
+    def estrai_modello(self, request, pk=None):
+        """Estrae il testo da un file SENZA salvarlo: l'operatore lo rivede e poi salva."""
+        self.get_object()  # verifica proprietà del lavoro
+        upload = request.FILES.get("file")
+        if upload is None:
+            return Response({"detail": "Nessun file."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            testo = _estrai_testo_modello(upload)
+        except Exception:  # noqa: BLE001
+            return Response(
+                {"detail": "Impossibile leggere il file. Usa PDF, DOCX o testo."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response({"testo": testo})
+
 
 class DocumentoViewSet(
     mixins.CreateModelMixin,

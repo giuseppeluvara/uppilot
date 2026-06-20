@@ -231,13 +231,17 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
         onSalvaTesto={(testo) =>
           azione(() => api.post(`/lavori/${id}/modello/`, { testo }), "Modello salvato")
         }
-        onCaricaFile={(file) =>
-          azione(async () => {
-            const form = new FormData();
-            form.append("file", file);
-            await api.upload(`/lavori/${id}/modello/`, form);
-          }, "Modello caricato")
-        }
+        onEstrai={async (file) => {
+          const form = new FormData();
+          form.append("file", file);
+          try {
+            const r = await api.upload<{ testo: string }>(`/lavori/${id}/estrai-modello/`, form);
+            return r.testo;
+          } catch (err) {
+            toast.error(err instanceof ApiError ? err.message : "File non leggibile.");
+            return null;
+          }
+        }}
       />
 
       <MotoreCard commerciale={commerciale} onChange={setCommerciale} />
@@ -329,13 +333,14 @@ const WARNING_COMMERCIALE =
 function ModelloRedazione({
   lavoro,
   onSalvaTesto,
-  onCaricaFile,
+  onEstrai,
 }: {
   lavoro: Lavoro;
   onSalvaTesto: (testo: string) => void;
-  onCaricaFile: (file: File) => void;
+  onEstrai: (file: File) => Promise<string | null>;
 }) {
   const [testo, setTesto] = useState(lavoro.modello_testo);
+  const [estraendo, setEstraendo] = useState(false);
   useEffect(() => setTesto(lavoro.modello_testo), [lavoro.modello_testo]);
   return (
     <Card>
@@ -346,25 +351,33 @@ function ModelloRedazione({
       <CardContent className="grid gap-3">
         <p className="text-sm text-muted-foreground">
           Definisci impostazione (suddivisione in paragrafi) e metodo di scrittura della bozza:
-          viene seguito a ogni analisi. Incolla un testo o carica un file (PDF/DOCX/TXT).
+          viene seguito a ogni analisi. Incolla un testo o carica un file (PDF/DOCX/TXT), poi salva.
         </p>
         <Textarea
           value={testo}
           onChange={(e) => setTesto(e.target.value)}
           placeholder="Es. Struttura: Svolgimento del processo; Motivi della decisione. Stile: periodi brevi, sobrio…"
-          className="min-h-28"
+          className="max-h-60 min-h-28"
         />
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <Input
-            type="file"
-            accept=".pdf,.docx,.txt,.md"
-            className="w-auto"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) onCaricaFile(f);
-              e.target.value = "";
-            }}
-          />
+          <div className="flex items-center gap-2">
+            <Input
+              type="file"
+              accept=".pdf,.docx,.txt,.md"
+              className="w-auto"
+              disabled={estraendo}
+              onChange={async (e) => {
+                const f = e.target.files?.[0];
+                e.target.value = "";
+                if (!f) return;
+                setEstraendo(true);
+                const t = await onEstrai(f);
+                if (t !== null) setTesto(t);
+                setEstraendo(false);
+              }}
+            />
+            {estraendo && <Loader2 className="size-4 animate-spin text-muted-foreground" />}
+          </div>
           <div className="flex items-center gap-2">
             {lavoro.modello_testo && (
               <Button variant="ghost" size="sm" onClick={() => onSalvaTesto("")}>

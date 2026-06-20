@@ -53,6 +53,18 @@ def test_imposta_e_cancella_modello_di_redazione(client, utente):
     assert lavoro.modello_testo == ""
 
 
+def test_estrai_modello_da_file_non_salva(client, utente):
+    from django.core.files.uploadedfile import SimpleUploadedFile
+
+    lavoro = Lavoro.objects.create(utente=utente, titolo="C")
+    f = SimpleUploadedFile("modello.txt", b"STRUTTURA: A; B.", content_type="text/plain")
+    r = client.post(f"/api/lavori/{lavoro.id}/estrai-modello/", {"file": f}, format="multipart")
+    assert r.status_code == 200
+    assert "STRUTTURA" in r.json()["testo"]
+    lavoro.refresh_from_db()
+    assert lavoro.modello_testo == ""  # l'estrazione NON salva: salva l'operatore
+
+
 def test_blocco_modello_guida_il_prompt(utente):
     from apps.analisi.services import _blocco_modello
 
