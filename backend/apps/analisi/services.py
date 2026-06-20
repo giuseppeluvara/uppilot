@@ -36,12 +36,24 @@ REGOLE TASSATIVE:
 - Scrivi solo ciò che è OGGETTIVO e ricavabile dagli atti. Niente valutazioni o conclusioni giuridiche.
 - Usa l'italiano. I dati personali sono già pseudonimizzati (es. [PRIVATE_PERSON_1]): \
 mantienili tali e non inventare nomi reali.
-
+{modello}
 Restituisci ESCLUSIVAMENTE un oggetto JSON: {{"in_fatto": "..."}}
 
 ATTI DEL FASCICOLO (pseudonimizzati):
 {documenti}
 """
+
+
+def _blocco_modello(lavoro) -> str:
+    """Blocco opzionale col modello di redazione fornito dall'operatore."""
+    modello = (getattr(lavoro, "modello_testo", "") or "").strip()
+    if not modello:
+        return ""
+    return (
+        "\nMODELLO DI REDAZIONE — adotta questa IMPOSTAZIONE (suddivisione in paragrafi) "
+        "e questo METODO DI SCRITTURA come riferimento di stile e struttura:\n"
+        f"{modello[:4000]}\n"
+    )
 
 PROMPT_RICHIESTE = """Sei un assistente che aiuta un operatore dell'Ufficio per il Processo.
 
@@ -220,10 +232,14 @@ def analizza_lavoro(lavoro, llm: LLMBackend) -> dict:
             "Nessun documento utilizzabile: caricane e accettane almeno uno."
         )
     blocco = _componi_documenti(documenti)
+    modello = _blocco_modello(lavoro)
 
-    # 1) Sezione "in fatto".
+    # 1) Sezione "in fatto" (seguendo l'eventuale modello di redazione dell'operatore).
     grezzo_fatto = llm.generate(
-        PROMPT_IN_FATTO.format(documenti=blocco), format="json", think=False, temperature=0.2
+        PROMPT_IN_FATTO.format(documenti=blocco, modello=modello),
+        format="json",
+        think=False,
+        temperature=0.2,
     )
     in_fatto = str(_estrai_json(grezzo_fatto).get("in_fatto", "")).strip()
 

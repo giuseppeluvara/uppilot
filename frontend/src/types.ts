@@ -40,6 +40,7 @@ export interface Lavoro {
   approfondimento_errore: string;
   ricerca_stato: StatoLavorazione;
   ricerca_errore: string;
+  modello_testo: string;
   sezioni: Sezione[];
   created_at: string;
   updated_at: string;

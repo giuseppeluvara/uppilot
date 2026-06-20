@@ -48,6 +48,9 @@ class Lavoro(models.Model):
     # Registro entità a livello di lavoro: placeholder canonico -> valore reale.
     # Garantisce placeholder coerenti tra i documenti e abilita l'export "in chiaro".
     mappa_entita = models.JSONField(default=dict, blank=True)
+    # Modello di redazione (facoltativo): sample/template che definisce impostazione
+    # (suddivisione in paragrafi) e metodo di scrittura della bozza. Guida l'analisi.
+    modello_testo = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

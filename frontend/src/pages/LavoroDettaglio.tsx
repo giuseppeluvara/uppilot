@@ -14,6 +14,7 @@ import {
   Scale,
   Search,
   ShieldAlert,
+  Trash2,
   TriangleAlert,
   Upload,
 } from "lucide-react";
@@ -207,6 +208,10 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
             onRiprova={(d) =>
               azione(() => api.post(`/documenti/${d}/ripseudonimizza/`), "Anonimizzazione riavviata")
             }
+            onElimina={(d) => {
+              if (confirm("Eliminare definitivamente questo documento?"))
+                azione(() => api.del(`/documenti/${d}/`), "Documento eliminato");
+            }}
           />
         ))}
         {daAccettare && (
@@ -220,6 +225,20 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
           </div>
         )}
       </section>
+
+      <ModelloRedazione
+        lavoro={lavoro}
+        onSalvaTesto={(testo) =>
+          azione(() => api.post(`/lavori/${id}/modello/`, { testo }), "Modello salvato")
+        }
+        onCaricaFile={(file) =>
+          azione(async () => {
+            const form = new FormData();
+            form.append("file", file);
+            await api.upload(`/lavori/${id}/modello/`, form);
+          }, "Modello caricato")
+        }
+      />
 
       <MotoreCard commerciale={commerciale} onChange={setCommerciale} />
 
@@ -307,6 +326,62 @@ const WARNING_COMMERCIALE =
   "Il testo (pseudonimizzato, non anonimizzato) viene inviato a un LLM commerciale in cloud: " +
   "ai fini del GDPR resta dato personale. Configura la chiave API e procedi solo se consapevole.";
 
+function ModelloRedazione({
+  lavoro,
+  onSalvaTesto,
+  onCaricaFile,
+}: {
+  lavoro: Lavoro;
+  onSalvaTesto: (testo: string) => void;
+  onCaricaFile: (file: File) => void;
+}) {
+  const [testo, setTesto] = useState(lavoro.modello_testo);
+  useEffect(() => setTesto(lavoro.modello_testo), [lavoro.modello_testo]);
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between space-y-0">
+        <CardTitle className="text-base">Modello di redazione (facoltativo)</CardTitle>
+        {lavoro.modello_testo && <Badge variant="secondary">Attivo</Badge>}
+      </CardHeader>
+      <CardContent className="grid gap-3">
+        <p className="text-sm text-muted-foreground">
+          Definisci impostazione (suddivisione in paragrafi) e metodo di scrittura della bozza:
+          viene seguito a ogni analisi. Incolla un testo o carica un file (PDF/DOCX/TXT).
+        </p>
+        <Textarea
+          value={testo}
+          onChange={(e) => setTesto(e.target.value)}
+          placeholder="Es. Struttura: Svolgimento del processo; Motivi della decisione. Stile: periodi brevi, sobrio…"
+          className="min-h-28"
+        />
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Input
+            type="file"
+            accept=".pdf,.docx,.txt,.md"
+            className="w-auto"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) onCaricaFile(f);
+              e.target.value = "";
+            }}
+          />
+          <div className="flex items-center gap-2">
+            {lavoro.modello_testo && (
+              <Button variant="ghost" size="sm" onClick={() => onSalvaTesto("")}>
+                Rimuovi
+              </Button>
+            )}
+            <Button size="sm" onClick={() => onSalvaTesto(testo)} disabled={testo === lavoro.modello_testo}>
+              <Save />
+              Salva
+            </Button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function MotoreCard({
   commerciale,
   onChange,
@@ -357,12 +432,14 @@ function SezioneCard({
   onAccetta,
   onVerifica,
   onRiprova,
+  onElimina,
 }: {
   sezione: Sezione;
   onUpload: (files: File[]) => void;
   onAccetta: (id: number) => void;
   onVerifica: (id: number) => void;
   onRiprova: (id: number) => void;
+  onElimina: (id: number) => void;
 }) {
   const [drag, setDrag] = useState(false);
   return (
@@ -425,6 +502,15 @@ function SezioneCard({
                     <a href={d.file} download={baseName(d.file)}>
                       <Download className="size-4" />
                     </a>
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-7 text-destructive"
+                    aria-label="Elimina documento"
+                    onClick={() => onElimina(d.id)}
+                  >
+                    <Trash2 className="size-4" />
                   </Button>
                   <StatoOcr doc={d} />
                   {d.stato_estrazione === "completato" && d.stato_anonimizzazione === "in_corso" && (

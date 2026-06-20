@@ -76,6 +76,7 @@ class LavoroSerializer(serializers.ModelSerializer):
             "approfondimento_errore",
             "ricerca_stato",
             "ricerca_errore",
+            "modello_testo",
             "sezioni",
             "created_at",
             "updated_at",
