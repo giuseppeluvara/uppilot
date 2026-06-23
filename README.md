@@ -28,7 +28,8 @@ Licenza: **AGPL-3.0-or-later**.
 - Il Privacy Filter esegue **pseudonimizzazione, NON anonimizzazione**: sotto il GDPR il dato
   pseudonimizzato **resta dato personale**. Non è una garanzia di conformità.
 - Default su fascicoli reali: **LLM locale**. L'uso di LLM commerciali in cloud è possibile solo
-  come **opt-in esplicito**, sempre su testo pseudonimizzato.
+  come **opt-in esplicito per singola azione**, sempre su testo pseudonimizzato. Non può essere
+  abilitato globalmente con una variabile d'ambiente.
 
 ---
 
@@ -111,26 +112,31 @@ editor; archivio storico.
 **M2** — ragionamento **"in diritto"** per richiesta (onere probatorio, non contestazioni, allegati,
 quesiti); **export `.docx`** (anche versione "in chiaro" de-pseudonimizzata); **ricerca giuridica
 "spunti"** (web o incolla manuale; la query esce sempre pseudonimizzata); **LLM commerciali opt-in**
-(SDK Anthropic); **RAG** su pgvector (corpus di normativa/giurisprudenza, ricerca semantica a
-supporto dell'analisi "in diritto").
+(SDK Anthropic); **RAG** su pgvector (corpus globale o personale di normativa/giurisprudenza,
+ricerca semantica a supporto dell'analisi "in diritto").
 
 **Grafo della conoscenza** — mappa navigabile di istituti, riferimenti normativi e **casi
 anonimizzati**, costruita dal **LLM locale** sul corpus e sull'analisi (solo testo pseudonimizzato).
 Visualizzazione interattiva (community detection a colori, ForceAtlas2) con filtri, ricerca e
-pannello di dettaglio. Implementazione nativa ispirata a `nashsu/llm_wiki` (nessun codice GPL; solo
-librerie viz MIT). È un ausilio alla consultazione, non una fonte di conclusioni (§1).
+pannello di dettaglio. La costruzione e la consultazione rispettano i permessi su casi e corpus.
+Implementazione nativa ispirata a `nashsu/llm_wiki` (nessun codice GPL; solo librerie viz MIT).
+È un ausilio alla consultazione, non una fonte di conclusioni (§1).
 
 **Affinamenti** — etichette PII italiane (C.F. / P.IVA / IBAN / PEC / ragioni sociali); resilienza
 dell'anonimizzazione (retry automatico + "Riprova" per documento); placeholder canonici per lavoro
 (coerenti tra documenti, abilitano l'export in chiaro); estrazione richieste robusta (due chiamate
-LLM focalizzate + schema vincolante); editor completo (motivazione "in diritto" + P.Q.M.); anteprima
-documenti; ricerca nell'archivio; corpus con upload file e categorie; export `.docx` con stile
-professionale; tema chiaro/scuro e upload multiplo drag & drop.
+LLM focalizzate + schema vincolante); fasi asincrone protette da doppio avvio e interrompibili dalla
+UI; editor completo (motivazione "in diritto" + P.Q.M.); anteprima documenti; ricerca nell'archivio;
+corpus con upload file, categorie, limite dimensione configurabile e permessi di visibilità/eliminazione;
+export `.docx` con stile professionale; tema chiaro/scuro, upload multiplo drag & drop e caricamento
+lazy delle schermate frontend.
 
 ## Stato
 
-**M1 + M2 completi**, validati end-to-end (anche su un fascicolo d'appalto reale). Suite backend
-verde (~58 test). Per l'uso operativo passo per passo vedi la **[Guida operativa](GUIDA.md)**.
+**M1 + M2 completi**, validati end-to-end (anche su un fascicolo d'appalto reale). Ultima verifica
+locale: **82 test backend verdi**, build frontend Vite riuscita, smoke test browser su desktop/mobile
+e check Django production senza issue bloccanti. Per l'uso operativo passo per passo vedi la
+**[Guida operativa](GUIDA.md)**.
 
 ---
 

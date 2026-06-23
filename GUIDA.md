@@ -43,7 +43,8 @@ Dentro il lavoro ci sono tre sezioni: **Documenti generici**, **Fascicolo dell'a
 **Fascicolo del convenuto/ricorrente**.
 - Trascina i file nell'area della sezione giusta (oppure clicca "Scegli i file"). Puoi caricarne
   **più alla volta**.
-- Sono accettati PDF (anche scansioni), immagini e manoscritti.
+- Sono accettati PDF (anche scansioni) e immagini/manoscritti (`png`, `jpg`, `tiff`, `bmp`, `webp`).
+  Il limite predefinito è **50 MB per file**, salvo diversa configurazione dell'installazione.
 - L'icona 👁 apre l'**anteprima** del documento.
 
 ### c) Estrazione e anonimizzazione (automatiche)
@@ -59,18 +60,24 @@ Per ogni documento pseudonimizzato puoi:
 > Solo i documenti **accettati** entrano nelle fasi successive.
 
 ### e) Analisi (in fatto + richieste)
-Premi **Avvia analisi**. Il sistema produce:
+Premi **Avvia analisi**. Se il pulsante non è attivo, il riquadro sopra l'analisi indica cosa manca
+(di solito almeno un documento accettato). Il sistema produce:
 - la **bozza "in fatto"** (modificabile);
 - l'elenco delle **richieste delle parti**, con gli elementi di supporto (onere probatorio, non
   contestazioni, allegati) e i **quesiti** da decidere.
 
+Se hai avviato l'analisi per errore o vuoi modificare prima i documenti, premi **Interrompi** mentre
+la fase è in corso.
+
 ### f) Approfondimento "in diritto"
 Premi **Approfondisci in diritto**. Per ogni richiesta avrai lo scaffold oggettivo; tu scrivi la
-**Motivazione (in diritto)** nel riquadro dedicato e premi **Salva motivazione**.
+**Motivazione (in diritto)** nel riquadro dedicato e premi **Salva motivazione**. Anche questa fase
+può essere interrotta con **Interrompi** mentre è in corso.
 
 ### g) Spunti di ricerca (facoltativo)
 Nella sezione spunti puoi **Cercare sul web** o **Incollare risultati** trovati altrove: il
 sistema ne ricava suggerimenti (non citazioni definitive). La query esce sempre pseudonimizzata.
+La ricerca in corso può essere fermata con **Interrompi**.
 
 ### h) P.Q.M. ed esportazione
 - Compila il **P.Q.M.** nel riquadro in fondo.
@@ -80,9 +87,10 @@ sistema ne ricava suggerimenti (non citazioni definitive). La query esce sempre 
     con cautela.
 
 ### i) Corpus di riferimento (facoltativo, migliora l'analisi)
-Dalla voce **Corpus** puoi caricare normativa/giurisprudenza (testo o file PDF, con categoria).
-Una volta indicizzata, l'analisi "in diritto" vi attinge automaticamente, e puoi farci ricerche
-semantiche.
+Dalla voce **Corpus** puoi caricare normativa/giurisprudenza (testo manuale o file `pdf`, `txt`,
+`md`, con categoria). Una volta indicizzata, l'analisi "in diritto" vi attinge automaticamente, e
+puoi farci ricerche semantiche. I documenti che carichi nel corpus sono visibili a te; il materiale
+globale/condiviso è gestito dagli amministratori.
 
 ---
 
@@ -90,8 +98,9 @@ semantiche.
 
 Di default tutte le elaborazioni usano il **modello locale** (nessun dato esce dal PC). Dentro un
 lavoro puoi spuntare **"Usa un LLM commerciale in cloud"** per usare un modello più potente: appare
-un **avviso** perché il testo (pseudonimizzato) viene inviato a un servizio esterno. Richiede una
-chiave API configurata (vedi README, sezione `.env`).
+un **avviso** perché il testo (pseudonimizzato) viene inviato a un servizio esterno. Non è attivabile
+globalmente per errore: va scelto esplicitamente dalla schermata del lavoro. Richiede una chiave API
+configurata (vedi README, sezione `.env`).
 
 ---
 
@@ -138,7 +147,7 @@ cat backup_uppilot.sql | docker compose exec -T db psql -U uppilot uppilot
 | Sintomo | Cosa fare |
 |---|---|
 | La pagina `:5173` non si apre | Attendi 1 minuto e ricarica. Verifica che **Docker Desktop** sia avviato (icona nella barra in alto). |
-| L'analisi resta "in corso" o va in errore | Serve **Ollama** attivo sull'host. Verifica con `ollama list` nel Terminale; se manca un modello, rilancia `make provision`. |
+| L'analisi resta "in corso" o va in errore | Se devi fermarla subito premi **Interrompi**. Se il problema si ripete, serve **Ollama** attivo sull'host: verifica con `ollama list` nel Terminale; se manca un modello, rilancia `make provision`. |
 | "Anonimizzazione fallita" su un documento | Premi **Riprova**. Su PC senza GPU il filtro è più lento: riprova a documento. |
 | L'opzione LLM commerciale dà errore | Manca la **chiave API**: impostala in `.env` (`COMMERCIAL_LLM_API_KEY`) e riavvia (`make up-mac`). |
 | Voglio ripartire da zero | `make down` poi `make up-mac`. (Per cancellare anche i dati: `docker compose down -v` — **attenzione, elimina tutto**.) |
