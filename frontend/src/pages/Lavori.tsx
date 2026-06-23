@@ -65,19 +65,19 @@ export function Lavori() {
 
   return (
     <div className="grid gap-6">
-      <div className="flex items-end justify-between gap-4">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Lavori</h1>
           <p className="text-sm text-muted-foreground">
             Crea un nuovo lavoro o riprendi uno dall'archivio.
           </p>
         </div>
-        <form onSubmit={crea} className="flex items-center gap-2">
+        <form onSubmit={crea} className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <Input
             placeholder="Titolo del nuovo lavoro"
             value={titolo}
             onChange={(e) => setTitolo(e.target.value)}
-            className="w-64"
+            className="sm:w-64"
           />
           <Button type="submit">
             <Plus />
@@ -118,46 +118,48 @@ export function Lavori() {
               Nessun lavoro corrisponde a “{filtro}”.
             </p>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Titolo</TableHead>
-                  <TableHead>Stato</TableHead>
-                  <TableHead>Aggiornato</TableHead>
-                  <TableHead className="w-0" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {lavoriFiltrati.map((l) => {
-                  const s = statoLavoro(l.stato);
-                  return (
-                    <TableRow
-                      key={l.id}
-                      onClick={() => apri(l.id)}
-                      tabIndex={0}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          apri(l.id);
-                        }
-                      }}
-                      className="cursor-pointer"
-                    >
-                      <TableCell className="font-medium">{l.titolo}</TableCell>
-                      <TableCell>
-                        <Badge variant={s.variant}>{s.label}</Badge>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {new Date(l.updated_at).toLocaleString("it-IT")}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <ChevronRight className="size-4 text-muted-foreground" />
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
+            <div className="overflow-x-auto">
+              <Table className="w-max min-w-full">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Titolo</TableHead>
+                    <TableHead>Stato</TableHead>
+                    <TableHead>Aggiornato</TableHead>
+                    <TableHead className="w-0" />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {lavoriFiltrati.map((l) => {
+                    const s = statoLavoro(l.stato);
+                    return (
+                      <TableRow
+                        key={l.id}
+                        onClick={() => apri(l.id)}
+                        tabIndex={0}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            apri(l.id);
+                          }
+                        }}
+                        className="cursor-pointer"
+                      >
+                        <TableCell className="font-medium">{l.titolo}</TableCell>
+                        <TableCell>
+                          <Badge variant={s.variant}>{s.label}</Badge>
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {new Date(l.updated_at).toLocaleString("it-IT")}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <ChevronRight className="size-4 text-muted-foreground" />
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
           )}
         </CardContent>
       </Card>

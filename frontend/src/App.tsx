@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { Suspense, lazy, useEffect, useState, type ReactNode } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import { Moon, ShieldAlert, Sun } from "lucide-react";
 import { api } from "@/api";
@@ -7,11 +7,16 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { Login } from "@/pages/Login";
-import { Lavori } from "@/pages/Lavori";
-import { LavoroDettaglio } from "@/pages/LavoroDettaglio";
-import { Corpus } from "@/pages/Corpus";
-import { Conoscenza } from "@/pages/Conoscenza";
+
+const Login = lazy(() => import("@/pages/Login").then((m) => ({ default: m.Login })));
+const Lavori = lazy(() => import("@/pages/Lavori").then((m) => ({ default: m.Lavori })));
+const LavoroDettaglio = lazy(() =>
+  import("@/pages/LavoroDettaglio").then((m) => ({ default: m.LavoroDettaglio })),
+);
+const Corpus = lazy(() => import("@/pages/Corpus").then((m) => ({ default: m.Corpus })));
+const Conoscenza = lazy(() =>
+  import("@/pages/Conoscenza").then((m) => ({ default: m.Conoscenza })),
+);
 
 const WARNING_GDPR =
   "Il Privacy Filter esegue pseudonimizzazione, non anonimizzazione: ai fini del GDPR il dato " +
@@ -76,25 +81,25 @@ export function App() {
     <TooltipProvider>
       <div className="min-h-dvh bg-background text-foreground">
         <header className="border-b">
-          <div className="mx-auto flex max-w-4xl items-center justify-between px-4 py-3">
-            <div className="flex items-center gap-6">
-              <Link to="/" className="text-xl tracking-tight">
+          <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-3 px-4 py-3">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3 sm:gap-6">
+              <Link to="/" className="shrink-0 text-xl tracking-tight">
                 <span className="font-bold">UPP</span>
                 <span className="font-light">ilot</span>
               </Link>
               {utente && (
-                <nav className="flex items-center gap-1">
+                <nav className="order-last flex w-full items-center gap-1 overflow-x-auto sm:order-none sm:w-auto">
                   <NavLink to="/">Lavori</NavLink>
                   <NavLink to="/corpus">Corpus</NavLink>
                   <NavLink to="/conoscenza">Conoscenza</NavLink>
                 </nav>
               )}
             </div>
-            <div className="flex items-center gap-2">
+            <div className="ml-auto flex shrink-0 items-center gap-2">
               <TemaToggle />
               {utente && (
                 <>
-                  <span className="text-sm text-muted-foreground">{utente.username}</span>
+                  <span className="hidden text-sm text-muted-foreground sm:inline">{utente.username}</span>
                   <Button variant="ghost" size="sm" onClick={logout}>
                     Esci
                   </Button>
@@ -104,24 +109,26 @@ export function App() {
           </div>
         </header>
 
-        <main className="mx-auto max-w-4xl px-4 py-8">
+        <main className="mx-auto max-w-5xl px-4 py-8">
           <Alert className="mb-8">
             <ShieldAlert />
             <AlertTitle>Trattamento dati personali</AlertTitle>
             <AlertDescription>{WARNING_GDPR}</AlertDescription>
           </Alert>
 
-          {!utente ? (
-            <Login onLogin={setUtente} />
-          ) : (
-            <Routes>
-              <Route path="/" element={<Lavori />} />
-              <Route path="/lavori/:id" element={<DettaglioRoute />} />
-              <Route path="/corpus" element={<Corpus />} />
-              <Route path="/conoscenza" element={<Conoscenza />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
-          )}
+          <Suspense fallback={<div className="h-32 animate-pulse rounded-md bg-muted" />}>
+            {!utente ? (
+              <Login onLogin={setUtente} />
+            ) : (
+              <Routes>
+                <Route path="/" element={<Lavori />} />
+                <Route path="/lavori/:id" element={<DettaglioRoute />} />
+                <Route path="/corpus" element={<Corpus />} />
+                <Route path="/conoscenza" element={<Conoscenza />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            )}
+          </Suspense>
         </main>
       </div>
       <Toaster richColors />

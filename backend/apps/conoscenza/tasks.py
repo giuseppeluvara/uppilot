@@ -4,6 +4,8 @@ from __future__ import annotations
 import logging
 
 from celery import shared_task
+from django.contrib.auth import get_user_model
+from django.db.models import Q
 
 from ai.factory import get_llm_backend
 from apps.casi.models import Lavoro
@@ -27,9 +29,12 @@ def costruisci_grafo_task(commerciale: bool = False, utente_id: int | None = Non
     meta.save(update_fields=["in_corso", "aggiornato_at"])
     try:
         llm = get_llm_backend(commerciale)
-        for doc in DocumentoCorpus.objects.filter(
-            stato=DocumentoCorpus.Stato.COMPLETATO
-        ):
+        corpus = DocumentoCorpus.objects.filter(stato=DocumentoCorpus.Stato.COMPLETATO)
+        if utente_id is not None:
+            user = get_user_model().objects.filter(pk=utente_id).first()
+            if user and not user.is_staff:
+                corpus = corpus.filter(Q(creato_da__isnull=True) | Q(creato_da_id=utente_id))
+        for doc in corpus:
             try:
                 estrai_grafo_corpus(doc, llm)
             except Exception:  # noqa: BLE001 - un documento non deve fermare il resto

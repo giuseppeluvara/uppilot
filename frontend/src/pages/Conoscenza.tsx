@@ -16,11 +16,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Toggle } from "@/components/ui/toggle";
 
-// Palette a 12 colori per i cluster tematici (community detection), come llm_wiki.
-const PALETTE = [
-  "#2563eb", "#16a34a", "#dc2626", "#d97706", "#7c3aed", "#0891b2",
-  "#db2777", "#65a30d", "#ea580c", "#4f46e5", "#0d9488", "#9333ea",
-];
+const CHART_TOKENS = ["--chart-1", "--chart-2", "--chart-3", "--chart-4", "--chart-5"];
 
 const TIPO_LABEL: Record<NodoGrafo["tipo"], string> = {
   concetto: "Concetto/istituto",
@@ -101,14 +97,19 @@ export function Conoscenza() {
     circular.assign(g);
     forceAtlas2.assign(g, { iterations: 120, settings: forceAtlas2.inferSettings(g) });
     louvain.assign(g);
+    const styles = getComputedStyle(document.documentElement);
+    const palette = CHART_TOKENS.map((token) => styles.getPropertyValue(token).trim()).filter(Boolean);
+    if (palette.length === 0) palette.push(styles.getPropertyValue("--primary").trim());
+    const edgeColor = styles.getPropertyValue("--border").trim();
+    const labelColor = styles.getPropertyValue("--muted-foreground").trim();
     g.forEachNode((node, attrs) =>
-      g.setNodeAttribute(node, "color", PALETTE[((attrs.community as number) ?? 0) % PALETTE.length]),
+      g.setNodeAttribute(node, "color", palette[((attrs.community as number) ?? 0) % palette.length]),
     );
 
     const renderer = new Sigma(g, container.current, {
       renderEdgeLabels: false,
-      defaultEdgeColor: "#cbd5e1",
-      labelColor: { color: "#64748b" },
+      defaultEdgeColor: edgeColor,
+      labelColor: { color: labelColor },
       labelDensity: 0.7,
     });
     renderer.on("clickNode", ({ node }) => setSelezionato(Number(node)));

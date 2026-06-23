@@ -87,6 +87,7 @@ export interface DocumentoCorpus {
   stato: "in_attesa" | "in_corso" | "completato" | "errore";
   errore: string;
   n_frammenti: number;
+  eliminabile: boolean;
   created_at: string;
 }
 

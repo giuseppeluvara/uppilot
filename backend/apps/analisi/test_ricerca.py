@@ -9,6 +9,7 @@ from ai.interfaces import AnonymizationResult, SuggerimentoRicerca
 from ai.search.web import WebLegalSearchProvider
 from apps.analisi import tasks
 from apps.analisi.models import Bozza, Richiesta, SpuntoRicerca
+from apps.analisi.ricerca import pseudonimizza_query
 from apps.casi.models import Lavoro
 
 
@@ -42,6 +43,11 @@ class FakeAnon:
 
     def anonymize(self, text):
         return AnonymizationResult("query pseudonimizzata", {})
+
+
+class FakeAnonVuoto:
+    def anonymize(self, text):
+        return AnonymizationResult("", {})
 
 
 @pytest.fixture
@@ -97,6 +103,11 @@ def test_task_web_query_esce_pseudonimizzata(lavoro, monkeypatch):
     assert spunto.origine == SpuntoRicerca.Origine.WEB
     assert spunto.query_pseudonimizzata == "query pseudonimizzata"
     assert "suggerisce" in spunto.sintesi
+
+
+def test_query_esterna_fallisce_se_pseudonimizzazione_vuota():
+    with pytest.raises(ValueError):
+        pseudonimizza_query("Mario Rossi inadempimento", FakeAnonVuoto())
 
 
 def test_task_manuale_crea_spunto(lavoro, monkeypatch):

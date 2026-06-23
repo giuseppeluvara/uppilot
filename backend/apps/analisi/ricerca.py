@@ -67,7 +67,10 @@ def proponi_ricerche(lavoro, llm: LLMBackend) -> list[dict]:
 
 def pseudonimizza_query(query: str, anon: AnonymizationService) -> str:
     """Garanzia §134: nessun dato reale delle parti esce verso l'esterno."""
-    return anon.anonymize(query).testo_pseudonimizzato.strip() or query
+    pseudonimizzata = anon.anonymize(query).testo_pseudonimizzato.strip()
+    if not pseudonimizzata:
+        raise ValueError("Pseudonimizzazione della query non riuscita: ricerca esterna bloccata.")
+    return pseudonimizzata
 
 
 def _formatta_risultati(risultati: list[SuggerimentoRicerca]) -> str:

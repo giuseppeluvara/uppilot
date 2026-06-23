@@ -33,11 +33,10 @@ def get_llm_backend(commerciale: bool = False) -> LLMBackend:
     """Restituisce l'LLM da usare.
 
     Default: locale (Ollama). L'LLM commerciale in cloud è OPT-IN (§5):
-    si attiva solo se `commerciale=True` (richiesta esplicita per-azione) oppure
-    se LLM_BACKEND="commercial", e richiede una chiave configurata.
+    si attiva solo se `commerciale=True` (richiesta esplicita per-azione) e
+    richiede una chiave configurata.
     """
-    usa_commerciale = commerciale or settings.LLM_BACKEND == "commercial"
-    if usa_commerciale:
+    if commerciale:
         if not commerciale_disponibile():
             raise RuntimeError(
                 "LLM commerciale non configurato: manca COMMERCIAL_LLM_API_KEY."

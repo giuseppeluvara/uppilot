@@ -20,6 +20,13 @@ class DocumentoCorpus(models.Model):
     fonte = models.CharField(max_length=512, blank=True)
     categoria = models.CharField(max_length=120, blank=True)
     testo = models.TextField()
+    creato_da = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="documenti_corpus",
+    )
     stato = models.CharField(
         max_length=16, choices=Stato.choices, default=Stato.IN_ATTESA
     )

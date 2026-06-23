@@ -97,5 +97,36 @@ def test_endpoint_cerca(django_user_model, monkeypatch):
 
 
 @pytest.mark.django_db
+def test_endpoint_cerca_clampa_k_negativo(django_user_model, monkeypatch):
+    monkeypatch.setattr(views, "get_embedding_backend", lambda: FakeEmbedding())
+    doc = DocumentoCorpus.objects.create(titolo="Contratto", testo="Sul contratto.")
+    indicizza(doc, FakeEmbedding())
+    utente = django_user_model.objects.create_user(username="r", password="x")
+    client = APIClient()
+    client.force_authenticate(user=utente)
+
+    resp = client.get("/api/corpus/cerca/", {"q": "contratto", "k": "-1"})
+
+    assert resp.status_code == 200
+    assert len(resp.data) == 1
+
+
+@pytest.mark.django_db
+def test_corpus_privato_non_visibile_ne_eliminabile_da_altri(django_user_model):
+    proprietario = django_user_model.objects.create_user(username="owner", password="x")
+    intruso = django_user_model.objects.create_user(username="intruso", password="x")
+    doc = DocumentoCorpus.objects.create(
+        titolo="Appunto privato", testo="testo", creato_da=proprietario
+    )
+
+    client = APIClient()
+    client.force_authenticate(user=intruso)
+
+    lista = client.get("/api/corpus/")
+    assert doc.id not in {d["id"] for d in lista.data}
+    assert client.delete(f"/api/corpus/{doc.id}/").status_code == 404
+
+
+@pytest.mark.django_db
 def test_cerca_richiede_auth():
     assert APIClient().get("/api/corpus/cerca/", {"q": "x"}).status_code == 403

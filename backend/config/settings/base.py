@@ -120,6 +120,12 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
+# Limite applicativo sugli upload. Evita che fascicoli o corpus enormi saturino
+# worker/LLM/OCR prima di una gestione a chunk più avanzata.
+UPPILOT_MAX_UPLOAD_BYTES = int(
+    os.environ.get("UPPILOT_MAX_UPLOAD_BYTES", str(50 * 1024 * 1024))
+)
+
 # Consente l'anteprima dei documenti in iframe same-origin (la SPA li incorpora
 # dalla propria origine via proxy). Default Django = DENY, che bloccherebbe l'embed.
 X_FRAME_OPTIONS = "SAMEORIGIN"

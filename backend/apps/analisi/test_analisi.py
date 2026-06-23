@@ -136,6 +136,18 @@ def test_endpoint_analizza_senza_documenti_400(lavoro):
     assert resp.status_code == 400
 
 
+def test_endpoint_analizza_gia_in_corso_409(lavoro):
+    _doc_accettato(lavoro, SezioneDocumenti.Tipo.ATTORE, "[PRIVATE_PERSON_1] agisce.")
+    lavoro.analisi_stato = Lavoro.StatoAnalisi.IN_CORSO
+    lavoro.save(update_fields=["analisi_stato"])
+    client = APIClient()
+    client.force_authenticate(user=lavoro.utente)
+
+    resp = client.post(f"/api/lavori/{lavoro.id}/analizza/")
+
+    assert resp.status_code == 409
+
+
 def test_endpoint_analizza_e_bozza(lavoro, monkeypatch):
     _doc_accettato(lavoro, SezioneDocumenti.Tipo.ATTORE, "[PRIVATE_PERSON_1] agisce.")
     monkeypatch.setattr(
@@ -160,4 +172,67 @@ def test_analizza_lavoro_altrui_404(lavoro, django_user_model):
     client = APIClient()
     client.force_authenticate(user=intruso)
     resp = client.post(f"/api/lavori/{lavoro.id}/analizza/")
+    assert resp.status_code == 404
+
+
+@pytest.fixture
+def revoca_finta(monkeypatch):
+    """Evita la dipendenza dal broker: registra le revoche invece di inviarle."""
+    from apps.analisi import views
+
+    revocati = []
+    monkeypatch.setattr(
+        views.current_app.control,
+        "revoke",
+        lambda task_id, **k: revocati.append(task_id),
+    )
+    return revocati
+
+
+def test_annulla_riporta_in_attesa_e_revoca(lavoro, revoca_finta):
+    lavoro.analisi_stato = Lavoro.StatoAnalisi.IN_CORSO
+    lavoro.analisi_errore = "qualcosa"
+    lavoro.analisi_task_id = "task-abc"
+    lavoro.save()
+
+    client = APIClient()
+    client.force_authenticate(user=lavoro.utente)
+    resp = client.post(f"/api/lavori/{lavoro.id}/annulla/", {"fase": "analisi"}, format="json")
+    assert resp.status_code == 200
+
+    lavoro.refresh_from_db()
+    assert lavoro.analisi_stato == Lavoro.StatoAnalisi.IN_ATTESA
+    assert lavoro.analisi_errore == ""
+    assert lavoro.analisi_task_id == ""
+    assert revoca_finta == ["task-abc"]  # task revocato con terminate
+
+
+def test_annulla_non_azzera_esito_gia_concluso(lavoro, revoca_finta):
+    """Race: se il task ha già completato, l'annulla non deve cancellare l'esito."""
+    lavoro.analisi_stato = Lavoro.StatoAnalisi.COMPLETATA
+    lavoro.analisi_task_id = "task-xyz"
+    lavoro.save()
+
+    client = APIClient()
+    client.force_authenticate(user=lavoro.utente)
+    resp = client.post(f"/api/lavori/{lavoro.id}/annulla/", {"fase": "analisi"}, format="json")
+    assert resp.status_code == 200
+
+    lavoro.refresh_from_db()
+    assert lavoro.analisi_stato == Lavoro.StatoAnalisi.COMPLETATA  # preservato
+    assert lavoro.analisi_task_id == ""  # ma l'id viene comunque ripulito
+
+
+def test_annulla_fase_non_valida_400(lavoro, revoca_finta):
+    client = APIClient()
+    client.force_authenticate(user=lavoro.utente)
+    resp = client.post(f"/api/lavori/{lavoro.id}/annulla/", {"fase": "boh"}, format="json")
+    assert resp.status_code == 400
+
+
+def test_annulla_lavoro_altrui_404(lavoro, django_user_model, revoca_finta):
+    intruso = django_user_model.objects.create_user(username="b", password="x")
+    client = APIClient()
+    client.force_authenticate(user=intruso)
+    resp = client.post(f"/api/lavori/{lavoro.id}/annulla/", {"fase": "analisi"}, format="json")
     assert resp.status_code == 404

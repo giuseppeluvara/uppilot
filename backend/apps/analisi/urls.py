@@ -1,6 +1,7 @@
 from django.urls import path
 
 from .views import (
+    AnnullaAnalisiView,
     ApprofondisciView,
     AvviaAnalisiView,
     AvviaRicercaView,
@@ -14,6 +15,7 @@ from .views import (
 
 urlpatterns = [
     path("lavori/<int:lavoro_id>/analizza/", AvviaAnalisiView.as_view(), name="analizza"),
+    path("lavori/<int:lavoro_id>/annulla/", AnnullaAnalisiView.as_view(), name="annulla"),
     path("lavori/<int:lavoro_id>/approfondisci/", ApprofondisciView.as_view(), name="approfondisci"),
     path("lavori/<int:lavoro_id>/richieste/", RichiesteListView.as_view(), name="richieste"),
     path("richieste/<int:pk>/", RichiestaUpdateView.as_view(), name="richiesta-update"),

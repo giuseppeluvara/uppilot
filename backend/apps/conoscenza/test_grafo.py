@@ -62,7 +62,7 @@ def test_estrai_grafo_corpus_collega_al_documento():
 
 @pytest.mark.django_db
 def test_endpoint_costruisci_grafo_e_delete(django_user_model, monkeypatch):
-    django_user_model.objects.create_user(username="g", password="x")
+    django_user_model.objects.create_user(username="g", password="x", is_staff=True)
     DocumentoCorpus.objects.create(
         titolo="Norme", testo="Testo.", stato=DocumentoCorpus.Stato.COMPLETATO
     )
@@ -81,6 +81,17 @@ def test_endpoint_costruisci_grafo_e_delete(django_user_model, monkeypatch):
     nodo_id = grafo["nodi"][0]["id"]
     assert client.delete(f"/api/grafo/nodo/{nodo_id}/").status_code == 204
     assert Nodo.objects.count() == 1
+
+
+@pytest.mark.django_db
+def test_redattore_non_elimina_nodo_globale(django_user_model):
+    u = django_user_model.objects.create_user(username="g", password="x")
+    nodo = upsert_nodo("Concetto condiviso", tipo="concetto")
+    client = APIClient()
+    client.force_authenticate(user=u)
+
+    assert client.delete(f"/api/grafo/nodo/{nodo.id}/").status_code == 403
+    assert Nodo.objects.filter(pk=nodo.id).exists()
 
 
 @pytest.mark.django_db

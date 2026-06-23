@@ -2,6 +2,7 @@ import os
 import zipfile
 from io import BytesIO
 
+from django.conf import settings
 from django.http import HttpResponse
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
@@ -31,6 +32,27 @@ from .serializers import (
     LavoroSerializer,
 )
 from .tasks import estrai_testo_documento, pseudonimizza_documento
+
+_MODELLO_EXTENSIONS = (".pdf", ".docx", ".txt", ".md")
+
+
+def _valida_upload_modello(uploaded):
+    if uploaded.size > settings.UPPILOT_MAX_UPLOAD_BYTES:
+        return Response(
+            {
+                "detail": (
+                    "File troppo grande. Limite: "
+                    f"{settings.UPPILOT_MAX_UPLOAD_BYTES // (1024 * 1024)} MB."
+                )
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if not uploaded.name.lower().endswith(_MODELLO_EXTENSIONS):
+        return Response(
+            {"detail": "Tipo di file non supportato. Usa PDF, DOCX o testo."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    return None
 
 
 class LavoroViewSet(viewsets.ModelViewSet):
@@ -85,6 +107,8 @@ class LavoroViewSet(viewsets.ModelViewSet):
         lavoro = self.get_object()
         upload = request.FILES.get("file")
         if upload is not None:
+            if resp := _valida_upload_modello(upload):
+                return resp
             try:
                 testo = _estrai_testo_modello(upload)
             except Exception:  # noqa: BLE001
@@ -105,6 +129,8 @@ class LavoroViewSet(viewsets.ModelViewSet):
         upload = request.FILES.get("file")
         if upload is None:
             return Response({"detail": "Nessun file."}, status=status.HTTP_400_BAD_REQUEST)
+        if resp := _valida_upload_modello(upload):
+            return resp
         try:
             testo = _estrai_testo_modello(upload)
         except Exception:  # noqa: BLE001

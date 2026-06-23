@@ -1,6 +1,7 @@
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from rest_framework import status
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -10,7 +11,25 @@ from .tasks import costruisci_grafo_task
 
 def _nodi_visibili(user):
     """Corpus condiviso (lavoro nullo) + SOLO i casi dell'utente."""
-    return Nodo.objects.filter(Q(lavoro__isnull=True) | Q(lavoro__utente=user))
+    qs = Nodo.objects.select_related("documento", "lavoro")
+    if user.is_staff:
+        return qs
+    return qs.filter(
+        Q(lavoro__utente=user)
+        | Q(lavoro__isnull=True, documento__isnull=True)
+        | Q(lavoro__isnull=True, documento__creato_da__isnull=True)
+        | Q(lavoro__isnull=True, documento__creato_da=user)
+    )
+
+
+def _puo_eliminare_nodo(user, nodo: Nodo) -> bool:
+    if user.is_staff:
+        return True
+    if nodo.lavoro_id:
+        return nodo.lavoro.utente_id == user.id
+    if nodo.documento_id:
+        return nodo.documento.creato_da_id == user.id
+    return False
 
 
 class GrafoView(APIView):
@@ -69,7 +88,10 @@ class CostruisciView(APIView):
 
 class NodoView(APIView):
     def delete(self, request, pk):
-        get_object_or_404(_nodi_visibili(request.user), pk=pk).delete()
+        nodo = get_object_or_404(_nodi_visibili(request.user), pk=pk)
+        if not _puo_eliminare_nodo(request.user, nodo):
+            raise PermissionDenied("Puoi eliminare solo nodi dei tuoi casi o del tuo corpus.")
+        nodo.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -77,5 +99,10 @@ class ArcoView(APIView):
     def delete(self, request, pk):
         ids = set(_nodi_visibili(request.user).values_list("id", flat=True))
         arco = get_object_or_404(Arco, pk=pk, da_id__in=ids, a_id__in=ids)
+        if not request.user.is_staff and (
+            not _puo_eliminare_nodo(request.user, arco.da)
+            or not _puo_eliminare_nodo(request.user, arco.a)
+        ):
+            raise PermissionDenied("Puoi eliminare solo relazioni dei tuoi casi o del tuo corpus.")
         arco.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)

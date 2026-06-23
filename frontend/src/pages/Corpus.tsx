@@ -9,6 +9,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -45,6 +47,7 @@ export function Corpus() {
   const [query, setQuery] = useState("");
   const [risultati, setRisultati] = useState<RisultatoCorpus[] | null>(null);
   const [cercando, setCercando] = useState(false);
+  const [daEliminare, setDaEliminare] = useState<DocumentoCorpus | null>(null);
   // Vista frammenti di un documento del corpus.
   const [frammentiDi, setFrammentiDi] = useState<DocumentoCorpus | null>(null);
   const [frammenti, setFrammenti] = useState<FrammentoCorpus[] | null>(null);
@@ -78,10 +81,11 @@ export function Corpus() {
     }
   }
 
-  async function eliminaDocumento(d: DocumentoCorpus) {
-    if (!confirm(`Eliminare "${d.titolo}" e tutti i suoi frammenti?`)) return;
+  async function confermaEliminaDocumento() {
+    if (!daEliminare) return;
     try {
-      await api.del(`/corpus/${d.id}/`);
+      await api.del(`/corpus/${daEliminare.id}/`);
+      setDaEliminare(null);
       toast.success("Documento eliminato dal corpus");
       await carica();
     } catch (err) {
@@ -189,12 +193,21 @@ export function Corpus() {
               />
             </div>
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <Input
-                type="file"
-                accept=".pdf,.txt,.md"
-                className="w-auto"
-                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-              />
+              <div className="flex items-center gap-2">
+                <input
+                  id="corpus-file"
+                  type="file"
+                  accept=".pdf,.txt,.md"
+                  className="sr-only"
+                  onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                />
+                <Button asChild type="button" variant="outline">
+                  <Label htmlFor="corpus-file" className="cursor-pointer">
+                    Scegli file
+                  </Label>
+                </Button>
+                {file && <span className="text-sm text-muted-foreground">{file.name}</span>}
+              </div>
               <Button type="submit" disabled={!testo.trim() && !file}>
                 <Plus />
                 Aggiungi al corpus
@@ -257,7 +270,7 @@ export function Corpus() {
                 onChange={(e) => setFiltroCat(e.target.value)}
                 className="sm:w-72"
               />
-              <Table>
+              <Table className="w-max min-w-full">
                 <TableHeader>
                   <TableRow>
                     <TableHead>Titolo</TableHead>
@@ -299,7 +312,8 @@ export function Corpus() {
                             size="icon"
                             className="size-7 text-destructive"
                             aria-label="Elimina documento"
-                            onClick={() => eliminaDocumento(d)}
+                            disabled={!d.eliminabile}
+                            onClick={() => setDaEliminare(d)}
                           >
                             <Trash2 className="size-4" />
                           </Button>
@@ -351,6 +365,25 @@ export function Corpus() {
               </div>
             </ScrollArea>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={daEliminare !== null} onOpenChange={(o) => !o && setDaEliminare(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Eliminare il documento?</DialogTitle>
+            <DialogDescription>
+              Verranno eliminati anche tutti i frammenti indicizzati di “{daEliminare?.titolo}”.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDaEliminare(null)}>
+              Annulla
+            </Button>
+            <Button variant="destructive" onClick={confermaEliminaDocumento}>
+              Elimina
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

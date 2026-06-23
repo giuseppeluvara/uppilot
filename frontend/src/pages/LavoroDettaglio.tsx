@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
+  Ban,
   CircleCheck,
   ClipboardPaste,
   Download,
@@ -63,6 +64,7 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
   const [spunti, setSpunti] = useState<Spunto[]>([]);
   const [commerciale, setCommerciale] = useState(false);
   const [pending, setPending] = useState<Pending>({});
+  const [documentoDaEliminare, setDocumentoDaEliminare] = useState<{ id: number; nome: string } | null>(null);
 
   const carica = useCallback(async () => {
     try {
@@ -155,12 +157,35 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
     [azione],
   );
 
+  // Interrompe un'elaborazione in corso (avviata per errore o da rifare).
+  const annulla = useCallback(
+    async (chiave: keyof Pending, fase: string) => {
+      setPending((p) => ({ ...p, [chiave]: false }));
+      await azione(() => api.post(`/lavori/${id}/annulla/`, { fase }), "Elaborazione interrotta");
+    },
+    [azione, id],
+  );
+
   if (!lavoro) return <Skeletons />;
 
   const s = statoLavoro(lavoro.stato);
   const daAccettare = lavoro.sezioni.some((sez) =>
     sez.documenti.some((d) => d.pseudonimizzato && d.stato_accettazione === "da_verificare"),
   );
+  const documenti = lavoro.sezioni.flatMap((sez) => sez.documenti);
+  const documentiUtilizzabili = documenti.some((d) => d.utilizzabile);
+  const documentiInLavorazione = documenti.some(
+    (d) =>
+      ["in_attesa", "in_corso"].includes(d.stato_estrazione) ||
+      d.stato_anonimizzazione === "in_corso",
+  );
+  const bloccoAnalisi = documentiUtilizzabili
+    ? ""
+    : documentiInLavorazione
+      ? "Attendi la fine di estrazione e pseudonimizzazione prima di avviare l'analisi."
+      : daAccettare
+        ? "Rivedi e accetta almeno un documento pseudonimizzato prima di avviare l'analisi."
+        : "Carica almeno un documento, attendi la pseudonimizzazione e accettalo prima di avviare l'analisi.";
   const nomiAllegati: Record<number, string> = {};
   for (const sez of lavoro.sezioni)
     for (const d of sez.documenti) nomiAllegati[d.id] = baseName(d.file);
@@ -217,10 +242,7 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
             onRiprova={(d) =>
               azione(() => api.post(`/documenti/${d}/ripseudonimizza/`), "Anonimizzazione riavviata")
             }
-            onElimina={(d) => {
-              if (confirm("Eliminare definitivamente questo documento?"))
-                azione(() => api.del(`/documenti/${d}/`), "Documento eliminato");
-            }}
+            onElimina={(d) => setDocumentoDaEliminare({ id: d, nome: nomiAllegati[d] ?? `documento ${d}` })}
           />
         ))}
         {daAccettare && (
@@ -258,7 +280,9 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
       <AnalisiCard
         lavoro={lavoro}
         inCorso={analisiInCorso}
+        blocco={bloccoAnalisi}
         onAvvia={() => avvia("analisi", () => api.post(`/lavori/${id}/analizza/`, { commerciale }), "Analisi avviata")}
+        onInterrompi={() => annulla("analisi", "analisi")}
       />
 
       {bozza && (
@@ -290,6 +314,7 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
           onApprofondisci={() =>
             avvia("approf", () => api.post(`/lavori/${id}/approfondisci/`, { commerciale }), "Approfondimento avviato")
           }
+          onInterrompi={() => annulla("approf", "approfondimento")}
           onSalvaMotivazione={(rid, testo) =>
             azione(() => api.patch(`/richieste/${rid}/`, { motivazione: testo }), "Motivazione salvata")
           }
@@ -301,6 +326,7 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
           lavoro={lavoro}
           spunti={spunti}
           inCorso={ricercaInCorso}
+          onInterrompi={() => annulla("ricerca", "ricerca")}
           onCercaWeb={() => avvia("ricerca", () => api.post(`/lavori/${id}/ricerca/`, { commerciale }), "Ricerca avviata")}
           onManuale={(argomento, materiale) =>
             avvia(
@@ -322,6 +348,33 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
           }
         />
       )}
+
+      <Dialog open={documentoDaEliminare !== null} onOpenChange={(o) => !o && setDocumentoDaEliminare(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Eliminare il documento?</DialogTitle>
+            <DialogDescription>
+              “{documentoDaEliminare?.nome}” verrà rimosso definitivamente dal lavoro.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDocumentoDaEliminare(null)}>
+              Annulla
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={async () => {
+                if (!documentoDaEliminare) return;
+                const idDocumento = documentoDaEliminare.id;
+                setDocumentoDaEliminare(null);
+                await azione(() => api.del(`/documenti/${idDocumento}/`), "Documento eliminato");
+              }}
+            >
+              Elimina
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -370,10 +423,11 @@ function ModelloRedazione({
         />
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
-            <Input
+            <input
+              id="modello-file"
               type="file"
               accept=".pdf,.docx,.txt,.md"
-              className="w-auto"
+              className="sr-only"
               disabled={estraendo}
               onChange={async (e) => {
                 const f = e.target.files?.[0];
@@ -385,6 +439,12 @@ function ModelloRedazione({
                 setEstraendo(false);
               }}
             />
+            <Button asChild type="button" variant="outline" size="sm" disabled={estraendo}>
+              <Label htmlFor="modello-file" className="cursor-pointer">
+                <Upload />
+                Scegli file
+              </Label>
+            </Button>
             {estraendo && <Loader2 className="size-4 animate-spin text-muted-foreground" />}
           </div>
           <div className="flex items-center gap-2">
@@ -698,29 +758,52 @@ function RevisionePrivacy({
   );
 }
 
+function InterrompiButton({ onInterrompi }: { onInterrompi: () => void }) {
+  return (
+    <Button variant="outline" size="sm" onClick={onInterrompi}>
+      <Ban />
+      Interrompi
+    </Button>
+  );
+}
+
 function AnalisiCard({
   lavoro,
   inCorso,
+  blocco,
   onAvvia,
+  onInterrompi,
 }: {
   lavoro: Lavoro;
   inCorso: boolean;
+  blocco: string;
   onAvvia: () => void;
+  onInterrompi: () => void;
 }) {
   return (
     <Card>
       <CardHeader className="flex-row items-center justify-between space-y-0">
         <CardTitle>Analisi</CardTitle>
-        <Button onClick={onAvvia} disabled={inCorso}>
-          {inCorso ? <Loader2 className="animate-spin" /> : <Play />}
-          {inCorso ? "Analisi in corso…" : "Avvia analisi"}
-        </Button>
+        <div className="flex items-center gap-2">
+          {inCorso && <InterrompiButton onInterrompi={onInterrompi} />}
+          <Button onClick={onAvvia} disabled={inCorso || !!blocco}>
+            {inCorso ? <Loader2 className="animate-spin" /> : <Play />}
+            {inCorso ? "Analisi in corso…" : "Avvia analisi"}
+          </Button>
+        </div>
       </CardHeader>
       <CardContent className="grid gap-3">
         <p className="text-sm text-muted-foreground">
           Sintetizza il fatto ed estrae le richieste delle parti. Usa solo i documenti accettati
           e pseudonimizzati.
         </p>
+        {blocco && (
+          <Alert>
+            <TriangleAlert />
+            <AlertTitle>Analisi non ancora pronta</AlertTitle>
+            <AlertDescription>{blocco}</AlertDescription>
+          </Alert>
+        )}
         {lavoro.analisi_stato === "errore" && (
           <Alert variant="destructive">
             <TriangleAlert />
@@ -843,6 +926,7 @@ function RichiesteSection({
   nomiAllegati,
   inCorso,
   onApprofondisci,
+  onInterrompi,
   onSalvaMotivazione,
 }: {
   lavoro: Lavoro;
@@ -850,16 +934,20 @@ function RichiesteSection({
   nomiAllegati: Record<number, string>;
   inCorso: boolean;
   onApprofondisci: () => void;
+  onInterrompi: () => void;
   onSalvaMotivazione: (richiestaId: number, testo: string) => void;
 }) {
   return (
     <div className="grid gap-3">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold tracking-tight">Richieste delle parti</h2>
-        <Button variant="outline" onClick={onApprofondisci} disabled={inCorso}>
-          {inCorso ? <Loader2 className="animate-spin" /> : <Scale />}
-          {inCorso ? "Approfondimento in corso…" : "Approfondisci in diritto"}
-        </Button>
+        <div className="flex items-center gap-2">
+          {inCorso && <InterrompiButton onInterrompi={onInterrompi} />}
+          <Button variant="outline" onClick={onApprofondisci} disabled={inCorso}>
+            {inCorso ? <Loader2 className="animate-spin" /> : <Scale />}
+            {inCorso ? "Approfondimento in corso…" : "Approfondisci in diritto"}
+          </Button>
+        </div>
       </div>
 
       {lavoro.approfondimento_stato === "errore" && (
@@ -947,12 +1035,14 @@ function RicercaCard({
   spunti,
   inCorso,
   onCercaWeb,
+  onInterrompi,
   onManuale,
 }: {
   lavoro: Lavoro;
   spunti: Spunto[];
   inCorso: boolean;
   onCercaWeb: () => void;
+  onInterrompi: () => void;
   onManuale: (argomento: string, materiale: string) => void;
 }) {
   return (
@@ -960,6 +1050,7 @@ function RicercaCard({
       <CardHeader className="flex-row items-center justify-between space-y-0">
         <CardTitle>Spunti di approfondimento giuridico</CardTitle>
         <div className="flex items-center gap-2">
+          {inCorso && <InterrompiButton onInterrompi={onInterrompi} />}
           <RicercaManuale onManuale={onManuale} />
           <Button onClick={onCercaWeb} disabled={inCorso}>
             {inCorso ? <Loader2 className="animate-spin" /> : <Search />}

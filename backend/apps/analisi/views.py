@@ -1,3 +1,4 @@
+from celery import current_app
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from rest_framework import status
@@ -28,6 +29,33 @@ def _lavoro_utente(request, lavoro_id) -> Lavoro:
     return get_object_or_404(Lavoro, pk=lavoro_id, utente=request.user)
 
 
+def _fase_gia_in_corso(lavoro: Lavoro, campo_stato: str, nome: str):
+    if getattr(lavoro, campo_stato) != Lavoro.StatoAnalisi.IN_CORSO:
+        return None
+    return Response(
+        {"detail": f"{nome} già in corso. Interrompila o attendi il completamento."},
+        status=status.HTTP_409_CONFLICT,
+    )
+
+
+def _marca_in_corso(lavoro: Lavoro, campo_stato: str, campo_errore: str) -> None:
+    setattr(lavoro, campo_stato, Lavoro.StatoAnalisi.IN_CORSO)
+    setattr(lavoro, campo_errore, "")
+    lavoro.save(update_fields=[campo_stato, campo_errore])
+
+
+def _salva_task_id_se_ancora_in_corso(
+    lavoro: Lavoro, campo_stato: str, campo_task: str, task_id: str
+) -> None:
+    lavoro.refresh_from_db(fields=[campo_stato])
+    setattr(
+        lavoro,
+        campo_task,
+        task_id if getattr(lavoro, campo_stato) == Lavoro.StatoAnalisi.IN_CORSO else "",
+    )
+    lavoro.save(update_fields=[campo_task])
+
+
 # Warning inequivocabile per l'uso di LLM commerciale in cloud (§5/§125).
 WARNING_COMMERCIALE = (
     "Stai inviando testo PSEUDONIMIZZATO (non anonimizzato) a un LLM commerciale "
@@ -52,6 +80,8 @@ class AvviaAnalisiView(APIView):
 
     def post(self, request, lavoro_id):
         lavoro = _lavoro_utente(request, lavoro_id)
+        if resp := _fase_gia_in_corso(lavoro, "analisi_stato", "Analisi"):
+            return resp
         if not documenti_utilizzabili(lavoro).exists():
             return Response(
                 {"detail": "Nessun documento utilizzabile: caricane e accettane almeno uno."},
@@ -61,7 +91,9 @@ class AvviaAnalisiView(APIView):
             commerciale, warning = _opt_in_commerciale(request)
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        analizza_lavoro_task.delay(lavoro.id, commerciale)
+        _marca_in_corso(lavoro, "analisi_stato", "analisi_errore")
+        res = analizza_lavoro_task.delay(lavoro.id, commerciale)
+        _salva_task_id_se_ancora_in_corso(lavoro, "analisi_stato", "analisi_task_id", res.id)
         return Response(
             {
                 "detail": "Analisi avviata.",
@@ -77,6 +109,8 @@ class ApprofondisciView(APIView):
 
     def post(self, request, lavoro_id):
         lavoro = _lavoro_utente(request, lavoro_id)
+        if resp := _fase_gia_in_corso(lavoro, "approfondimento_stato", "Approfondimento"):
+            return resp
         if not lavoro.richieste.exists():
             return Response(
                 {"detail": "Nessuna richiesta: esegui prima l'analisi."},
@@ -86,7 +120,11 @@ class ApprofondisciView(APIView):
             commerciale, warning = _opt_in_commerciale(request)
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        approfondisci_lavoro_task.delay(lavoro.id, commerciale)
+        _marca_in_corso(lavoro, "approfondimento_stato", "approfondimento_errore")
+        res = approfondisci_lavoro_task.delay(lavoro.id, commerciale)
+        _salva_task_id_se_ancora_in_corso(
+            lavoro, "approfondimento_stato", "approfondimento_task_id", res.id
+        )
         return Response(
             {
                 "detail": "Approfondimento avviato.",
@@ -102,11 +140,15 @@ class AvviaRicercaView(APIView):
 
     def post(self, request, lavoro_id):
         lavoro = _lavoro_utente(request, lavoro_id)
+        if resp := _fase_gia_in_corso(lavoro, "ricerca_stato", "Ricerca"):
+            return resp
         try:
             commerciale, warning = _opt_in_commerciale(request)
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        ricerca_spunti_task.delay(lavoro.id, commerciale)
+        _marca_in_corso(lavoro, "ricerca_stato", "ricerca_errore")
+        res = ricerca_spunti_task.delay(lavoro.id, commerciale)
+        _salva_task_id_se_ancora_in_corso(lavoro, "ricerca_stato", "ricerca_task_id", res.id)
         return Response(
             {
                 "detail": "Ricerca avviata.",
@@ -122,6 +164,8 @@ class RicercaManualeView(APIView):
 
     def post(self, request, lavoro_id):
         lavoro = _lavoro_utente(request, lavoro_id)
+        if resp := _fase_gia_in_corso(lavoro, "ricerca_stato", "Ricerca"):
+            return resp
         materiale = (request.data.get("materiale") or "").strip()
         if not materiale:
             return Response(
@@ -132,13 +176,66 @@ class RicercaManualeView(APIView):
             commerciale, warning = _opt_in_commerciale(request)
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        ricerca_manuale_task.delay(
+        _marca_in_corso(lavoro, "ricerca_stato", "ricerca_errore")
+        res = ricerca_manuale_task.delay(
             lavoro.id, (request.data.get("argomento") or "").strip(), materiale, commerciale
         )
+        _salva_task_id_se_ancora_in_corso(lavoro, "ricerca_stato", "ricerca_task_id", res.id)
         return Response(
             {"detail": "Spunto in elaborazione.", "warning": warning},
             status=status.HTTP_202_ACCEPTED,
         )
+
+
+# Fase -> (campo task_id, campo stato, campo errore) sul modello Lavoro.
+FASI_ANNULLABILI = {
+    "analisi": ("analisi_task_id", "analisi_stato", "analisi_errore"),
+    "approfondimento": (
+        "approfondimento_task_id",
+        "approfondimento_stato",
+        "approfondimento_errore",
+    ),
+    "ricerca": ("ricerca_task_id", "ricerca_stato", "ricerca_errore"),
+}
+
+
+class AnnullaAnalisiView(APIView):
+    """Interrompe un'elaborazione in corso revocando il task Celery (§82).
+
+    Utile se l'utente l'ha avviata per errore o vuole prima modificare i documenti.
+    Riporta la fase a 'in attesa' così può essere rilanciata.
+    """
+
+    def post(self, request, lavoro_id):
+        lavoro = _lavoro_utente(request, lavoro_id)
+        fase = request.data.get("fase")
+        if fase not in FASI_ANNULLABILI:
+            return Response(
+                {"detail": "Fase non valida: usa 'analisi', 'approfondimento' o 'ricerca'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        campo_task, campo_stato, campo_errore = FASI_ANNULLABILI[fase]
+
+        task_id = getattr(lavoro, campo_task)
+        if task_id:
+            # terminate=True ferma anche il task già in esecuzione (non solo in coda).
+            current_app.control.revoke(task_id, terminate=True, signal="SIGTERM")
+
+        # Rilegge lo stato fresco dal DB: il task potrebbe essersi concluso tra il
+        # caricamento del lavoro e ora; senza questo scriveremmo 'in attesa' sopra
+        # un esito 'completata' già persistito (race), perdendolo nella UI.
+        lavoro.refresh_from_db(fields=[campo_stato])
+
+        campi = [campo_task]
+        setattr(lavoro, campo_task, "")
+        # Riporta a 'in attesa' solo se è davvero in corso: evita di azzerare un
+        # esito appena concluso (race tra revoke e completamento del task).
+        if getattr(lavoro, campo_stato) == Lavoro.StatoAnalisi.IN_CORSO:
+            setattr(lavoro, campo_stato, Lavoro.StatoAnalisi.IN_ATTESA)
+            setattr(lavoro, campo_errore, "")
+            campi += [campo_stato, campo_errore]
+        lavoro.save(update_fields=campi)
+        return Response({"detail": "Elaborazione interrotta."}, status=status.HTTP_200_OK)
 
 
 class SpuntiListView(ListAPIView):

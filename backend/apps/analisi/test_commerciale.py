@@ -106,6 +106,20 @@ def test_factory_commerciale_ok():
     assert backend.model == "claude-opus-4-8"
 
 
+@override_settings(
+    LLM_BACKEND="commercial",
+    COMMERCIAL_LLM_API_KEY="chiave",
+)
+def test_factory_commerciale_richiede_opt_in_esplicito(monkeypatch):
+    from ai import factory
+
+    class FakeLocale:
+        pass
+
+    monkeypatch.setattr(factory, "OllamaLLMBackend", lambda *a, **k: FakeLocale())
+    assert isinstance(get_llm_backend(commerciale=False), FakeLocale)
+
+
 @override_settings(COMMERCIAL_LLM_API_KEY="")
 @pytest.mark.django_db
 def test_endpoint_commerciale_non_configurato_400(django_user_model):

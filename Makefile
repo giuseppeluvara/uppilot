@@ -39,7 +39,7 @@ makemigrations: ## Genera le migrazioni
 	$(COMPOSE) exec backend python manage.py makemigrations
 
 test: ## Esegue i test backend
-	$(COMPOSE) exec backend pytest
+	$(COMPOSE) exec backend pytest --ds=config.settings.test
 
 sh: ## Shell nel container backend
 	$(COMPOSE) exec backend sh

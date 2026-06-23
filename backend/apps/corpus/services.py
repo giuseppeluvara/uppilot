@@ -1,6 +1,7 @@
 """Servizi RAG: indicizzazione e ricerca semantica (§83)."""
 from __future__ import annotations
 
+from django.db.models import QuerySet
 from pgvector.django import CosineDistance
 
 from ai.interfaces import EmbeddingBackend
@@ -35,12 +36,20 @@ def indicizza(documento: DocumentoCorpus, emb: EmbeddingBackend) -> int:
     return len(pezzi)
 
 
-def cerca(query: str, emb: EmbeddingBackend, k: int = 5) -> list[FrammentoCorpus]:
+def cerca(
+    query: str,
+    emb: EmbeddingBackend,
+    k: int = 5,
+    documenti: QuerySet[DocumentoCorpus] | None = None,
+) -> list[FrammentoCorpus]:
     """Ricerca semantica: ritorna i k frammenti più vicini (distanza coseno)."""
     vettore = emb.embed(query)
+    k = min(max(int(k), 1), 20)
+    qs = FrammentoCorpus.objects.exclude(embedding=None)
+    if documenti is not None:
+        qs = qs.filter(documento__in=documenti)
     return list(
-        FrammentoCorpus.objects.exclude(embedding=None)
-        .annotate(distanza=CosineDistance("embedding", vettore))
+        qs.annotate(distanza=CosineDistance("embedding", vettore))
         .order_by("distanza")
         .select_related("documento")[:k]
     )

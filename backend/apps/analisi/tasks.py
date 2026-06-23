@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 
 from celery import shared_task
+from django.db.models import Q
 
 from ai.factory import (
     get_anonymization_service,
@@ -39,7 +40,8 @@ def analizza_lavoro_task(lavoro_id: int, commerciale: bool = False) -> None:
         logger.exception("Analisi fallita per il lavoro %s", lavoro_id)
         lavoro.analisi_stato = Lavoro.StatoAnalisi.ERRORE
         lavoro.analisi_errore = str(exc)
-        lavoro.save(update_fields=["analisi_stato", "analisi_errore"])
+        lavoro.analisi_task_id = ""
+        lavoro.save(update_fields=["analisi_stato", "analisi_errore", "analisi_task_id"])
         return
 
     # Persiste la bozza "in fatto".
@@ -68,10 +70,11 @@ def analizza_lavoro_task(lavoro_id: int, commerciale: bool = False) -> None:
         lavoro.transiziona(StatoLavoro.BOZZA_GENERATA)
 
     lavoro.analisi_stato = Lavoro.StatoAnalisi.COMPLETATA
-    lavoro.save(update_fields=["analisi_stato"])
+    lavoro.analisi_task_id = ""
+    lavoro.save(update_fields=["analisi_stato", "analisi_task_id"])
 
 
-def _riferimenti_corpus(testo: str) -> str:
+def _riferimenti_corpus(lavoro: Lavoro, testo: str) -> str:
     """Recupera spunti dal corpus per la richiesta (RAG, §83).
 
     Graceful: se il corpus è vuoto, l'embedding non è disponibile o qualcosa va
@@ -79,8 +82,12 @@ def _riferimenti_corpus(testo: str) -> str:
     """
     try:
         from apps.corpus.services import cerca
+        from apps.corpus.models import DocumentoCorpus
 
-        frammenti = cerca(testo, get_embedding_backend(), k=3)
+        documenti = DocumentoCorpus.objects.filter(
+            Q(creato_da__isnull=True) | Q(creato_da_id=lavoro.utente_id)
+        )
+        frammenti = cerca(testo, get_embedding_backend(), k=3, documenti=documenti)
         if not frammenti:
             return ""
         return "\n".join(
@@ -103,7 +110,7 @@ def approfondisci_lavoro_task(lavoro_id: int, commerciale: bool = False) -> None
     try:
         llm = get_llm_backend(commerciale)
         for richiesta in lavoro.richieste.all():
-            riferimenti = _riferimenti_corpus(richiesta.testo)
+            riferimenti = _riferimenti_corpus(lavoro, richiesta.testo)
             dati = approfondisci_richiesta(richiesta, documenti, llm, riferimenti)
             richiesta.onere_probatorio = dati["onere_probatorio"]
             richiesta.non_contestazioni = dati["non_contestazioni"]
@@ -122,11 +129,19 @@ def approfondisci_lavoro_task(lavoro_id: int, commerciale: bool = False) -> None
         logger.exception("Approfondimento fallito per il lavoro %s", lavoro_id)
         lavoro.approfondimento_stato = Lavoro.StatoAnalisi.ERRORE
         lavoro.approfondimento_errore = str(exc)
-        lavoro.save(update_fields=["approfondimento_stato", "approfondimento_errore"])
+        lavoro.approfondimento_task_id = ""
+        lavoro.save(
+            update_fields=[
+                "approfondimento_stato",
+                "approfondimento_errore",
+                "approfondimento_task_id",
+            ]
+        )
         return
 
     lavoro.approfondimento_stato = Lavoro.StatoAnalisi.COMPLETATA
-    lavoro.save(update_fields=["approfondimento_stato"])
+    lavoro.approfondimento_task_id = ""
+    lavoro.save(update_fields=["approfondimento_stato", "approfondimento_task_id"])
 
 
 @shared_task
@@ -162,11 +177,13 @@ def ricerca_spunti_task(lavoro_id: int, commerciale: bool = False) -> None:
         logger.exception("Ricerca spunti fallita per il lavoro %s", lavoro_id)
         lavoro.ricerca_stato = Lavoro.StatoAnalisi.ERRORE
         lavoro.ricerca_errore = str(exc)
-        lavoro.save(update_fields=["ricerca_stato", "ricerca_errore"])
+        lavoro.ricerca_task_id = ""
+        lavoro.save(update_fields=["ricerca_stato", "ricerca_errore", "ricerca_task_id"])
         return
 
     lavoro.ricerca_stato = Lavoro.StatoAnalisi.COMPLETATA
-    lavoro.save(update_fields=["ricerca_stato"])
+    lavoro.ricerca_task_id = ""
+    lavoro.save(update_fields=["ricerca_stato", "ricerca_task_id"])
 
 
 @shared_task
@@ -192,8 +209,10 @@ def ricerca_manuale_task(
         logger.exception("Ricerca manuale fallita per il lavoro %s", lavoro_id)
         lavoro.ricerca_stato = Lavoro.StatoAnalisi.ERRORE
         lavoro.ricerca_errore = str(exc)
-        lavoro.save(update_fields=["ricerca_stato", "ricerca_errore"])
+        lavoro.ricerca_task_id = ""
+        lavoro.save(update_fields=["ricerca_stato", "ricerca_errore", "ricerca_task_id"])
         return
 
     lavoro.ricerca_stato = Lavoro.StatoAnalisi.COMPLETATA
-    lavoro.save(update_fields=["ricerca_stato"])
+    lavoro.ricerca_task_id = ""
+    lavoro.save(update_fields=["ricerca_stato", "ricerca_task_id"])
