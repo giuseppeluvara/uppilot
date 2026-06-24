@@ -64,9 +64,24 @@ const TITOLO_SEZIONE: Record<Sezione["tipo"], string> = {
   convenuto: "Fascicolo del convenuto / ricorrente",
 };
 
+const TIPO_RICHIESTA: Record<Richiesta["tipo"], string> = {
+  domanda: "Domanda",
+  difesa_eccezione: "Difesa/eccezione",
+  riconvenzionale: "Riconvenzionale",
+  istruttoria: "Istruttoria",
+  altro: "Altro",
+};
+
 const baseName = (p: string) => decodeURIComponent(p.split("/").pop() || p);
 
 type Pending = { analisi?: boolean; approf?: boolean; ricerca?: boolean };
+type ConfermaAzione = {
+  titolo: string;
+  descrizione: string;
+  conferma: string;
+  destructive?: boolean;
+  onConfirm: () => void;
+};
 
 export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: () => void }) {
   const [lavoro, setLavoro] = useState<Lavoro | null>(null);
@@ -75,6 +90,7 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
   const [spunti, setSpunti] = useState<Spunto[]>([]);
   const [commerciale, setCommerciale] = useState(false);
   const [pending, setPending] = useState<Pending>({});
+  const [conferma, setConferma] = useState<ConfermaAzione | null>(null);
   const [documentoDaEliminare, setDocumentoDaEliminare] = useState<{ id: number; nome: string } | null>(null);
 
   const carica = useCallback(async () => {
@@ -215,33 +231,59 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
   }
 
   function avviaAnalisi() {
-    let conferma_parziale = false;
-    if (analisiParziale) {
-      conferma_parziale = window.confirm(
-        "Ci sono documenti pseudonimizzati non ancora accettati. Vuoi avviare comunque l'analisi usando solo i documenti già pronti?",
+    const start = (conferma_parziale = false) =>
+      avvia(
+        "analisi",
+        () => api.post(`/lavori/${id}/analizza/`, { commerciale, conferma_parziale }),
+        "Analisi avviata",
       );
-      if (!conferma_parziale) return;
+    if (analisiParziale) {
+      setConferma({
+        titolo: "Avviare analisi parziale?",
+        descrizione:
+          "Ci sono documenti pseudonimizzati non ancora accettati. L'analisi userà solo quelli già pronti.",
+        conferma: "Avvia analisi parziale",
+        onConfirm: () => start(true),
+      });
+      return;
     }
-    avvia(
-      "analisi",
-      () => api.post(`/lavori/${id}/analizza/`, { commerciale, conferma_parziale }),
-      "Analisi avviata",
-    );
+    start(false);
   }
 
-  function confermaExport(inChiaro: boolean) {
-    if (inChiaro) {
-      return window.confirm(
-        "Stai scaricando la versione in chiaro con i dati personali reali. Procedere?",
+  function scaricaExport(inChiaro: boolean) {
+    const path = `/lavori/${id}/esporta/${inChiaro ? "?chiaro=1" : ""}`;
+    const scarica = (overridePrivacy = false) =>
+      azione(
+        () =>
+          api.download(
+            overridePrivacy ? `/lavori/${id}/esporta/?force_privacy=1` : path,
+            `bozza_${id}${inChiaro ? "_in_chiaro" : ""}.docx`,
+          ),
+        "Documento scaricato",
       );
+    if (inChiaro) {
+      setConferma({
+        titolo: "Scaricare versione in chiaro?",
+        descrizione: "Il documento conterrà i dati personali reali delle parti.",
+        conferma: "Scarica in chiaro",
+        destructive: true,
+        onConfirm: () => scarica(false),
+      });
+      return;
     }
     const warnings = privacyReport?.warnings ?? 0;
     if (warnings > 0) {
-      return window.confirm(
-        "Il controllo privacy segnala possibili residui nel testo pseudonimizzato. Vuoi scaricare comunque il Word?",
-      );
+      setConferma({
+        titolo: "Override controllo privacy?",
+        descrizione:
+          "Il controllo privacy segnala possibili residui nel testo pseudonimizzato. Scarica solo dopo revisione consapevole.",
+        conferma: "Scarica comunque",
+        destructive: true,
+        onConfirm: () => scarica(true),
+      });
+      return;
     }
-    return true;
+    scarica(false);
   }
 
   return (
@@ -285,6 +327,9 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
             onUpload={(files) => caricaFile(sez.id, files)}
             onAccetta={(d) => azione(() => api.post(`/documenti/${d}/accetta/`), "Documento accettato")}
             onVerifica={(d) => azione(() => api.post(`/documenti/${d}/verifica/`), "Anonimizzazione verificata")}
+            onSalvaPrivacy={(d, payload) =>
+              azione(() => api.patch(`/documenti/${d}/privacy/`, payload), "Correzioni privacy salvate")
+            }
             onRiprova={(d) =>
               azione(() => api.post(`/documenti/${d}/ripseudonimizza/`), "Anonimizzazione riavviata")
             }
@@ -336,17 +381,8 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
       {bozza && (
         <BozzaEditor
           bozza={bozza}
-          onScarica={() =>
-            confermaExport(false) &&
-            azione(() => api.download(`/lavori/${id}/esporta/`, `bozza_${id}.docx`), "Documento scaricato")
-          }
-          onScaricaChiaro={() =>
-            confermaExport(true) &&
-            azione(
-              () => api.download(`/lavori/${id}/esporta/?chiaro=1`, `bozza_${id}_in_chiaro.docx`),
-              "Documento in chiaro scaricato",
-            )
-          }
+          onScarica={() => scaricaExport(false)}
+          onScaricaChiaro={() => scaricaExport(true)}
           onSalva={(testo) =>
             azione(async () => {
               setBozza(await api.patch<Bozza>(`/lavori/${id}/bozza/`, { in_fatto: testo }));
@@ -423,6 +459,30 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
               }}
             >
               Elimina
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={conferma !== null} onOpenChange={(o) => !o && setConferma(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{conferma?.titolo}</DialogTitle>
+            <DialogDescription>{conferma?.descrizione}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConferma(null)}>
+              Annulla
+            </Button>
+            <Button
+              variant={conferma?.destructive ? "destructive" : "default"}
+              onClick={() => {
+                const az = conferma?.onConfirm;
+                setConferma(null);
+                az?.();
+              }}
+            >
+              {conferma?.conferma ?? "Conferma"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -551,11 +611,15 @@ function MotoreCard({
 function ProgressMeter({ progress }: { progress?: ProgressoTask }) {
   if (!progress || (!progress.messaggio && progress.percentuale === undefined)) return null;
   const percentuale = Math.max(0, Math.min(100, progress.percentuale ?? 0));
+  const secondi =
+    progress.aggiornato_at && !Number.isNaN(Date.parse(progress.aggiornato_at))
+      ? Math.max(0, Math.round((Date.now() - Date.parse(progress.aggiornato_at)) / 1000))
+      : null;
   return (
     <div className="grid gap-1 rounded-lg border bg-muted/20 p-3">
       <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
         <span>{progress.messaggio || progress.fase || "Elaborazione in corso"}</span>
-        <span>{percentuale}%</span>
+        <span>{secondi !== null ? `${percentuale}% · ${secondi}s` : `${percentuale}%`}</span>
       </div>
       <div className="h-2 overflow-hidden rounded-full bg-muted">
         <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${percentuale}%` }} />
@@ -567,12 +631,14 @@ function ProgressMeter({ progress }: { progress?: ProgressoTask }) {
 function PrivacyReportAlert({ report }: { report?: PrivacyReport }) {
   if (!report || report.ok) return null;
   const leak = report.leaks.slice(0, 5).map((l) => `${l.token} (${l.placeholder})`);
+  const unknown = (report.unknown_pii ?? []).slice(0, 5).map((l) => `${l.token} (${l.tipo})`);
   return (
     <Alert variant="destructive">
       <ShieldAlert />
       <AlertTitle>Controllo privacy da rivedere</AlertTitle>
       <AlertDescription>
         {leak.length > 0 && <>Possibili residui: {leak.join(", ")}. </>}
+        {unknown.length > 0 && <>Possibili residui non mappati: {unknown.join(", ")}. </>}
         {report.malformed_placeholders.length > 0 &&
           <>Placeholder anomali: {report.malformed_placeholders.slice(0, 3).join(", ")}. </>}
         Rivedi l'anonimizzazione prima di esportare o rilanciare analisi sensibili.
@@ -666,6 +732,7 @@ function SezioneCard({
   onUpload,
   onAccetta,
   onVerifica,
+  onSalvaPrivacy,
   onRiprova,
   onElimina,
 }: {
@@ -673,6 +740,7 @@ function SezioneCard({
   onUpload: (files: File[]) => void;
   onAccetta: (id: number) => void;
   onVerifica: (id: number) => void;
+  onSalvaPrivacy: (id: number, payload: { testo_pseudonimizzato: string; mappa_entita: Record<string, string> }) => void;
   onRiprova: (id: number) => void;
   onElimina: (id: number) => void;
 }) {
@@ -714,6 +782,8 @@ function SezioneCard({
           <Input
             type="file"
             multiple
+            aria-label={`Carica documenti - ${TITOLO_SEZIONE[sezione.tipo]}`}
+            data-testid={`upload-${sezione.tipo}`}
             className="hidden"
             onChange={(e) => {
               const fs = Array.from(e.target.files ?? []);
@@ -794,7 +864,12 @@ function SezioneCard({
                   ) : (
                     d.pseudonimizzato &&
                     d.stato_accettazione === "da_verificare" && (
-                      <RevisionePrivacy doc={d} onAccetta={onAccetta} onVerifica={onVerifica} />
+                      <RevisionePrivacy
+                        doc={d}
+                        onAccetta={onAccetta}
+                        onVerifica={onVerifica}
+                        onSalva={onSalvaPrivacy}
+                      />
                     )
                   )}
                 </div>
@@ -846,13 +921,23 @@ function RevisionePrivacy({
   doc,
   onAccetta,
   onVerifica,
+  onSalva,
 }: {
   doc: Documento;
   onAccetta: (id: number) => void;
   onVerifica: (id: number) => void;
+  onSalva: (id: number, payload: { testo_pseudonimizzato: string; mappa_entita: Record<string, string> }) => void;
 }) {
   const [aperto, setAperto] = useState(false);
-  const entita = Object.entries(doc.mappa_entita);
+  const [testo, setTesto] = useState(doc.testo_pseudonimizzato);
+  const [mappa, setMappa] = useState<Record<string, string>>(doc.mappa_entita);
+  useEffect(() => {
+    if (!aperto) return;
+    setTesto(doc.testo_pseudonimizzato);
+    setMappa(doc.mappa_entita);
+  }, [aperto, doc.testo_pseudonimizzato, doc.mappa_entita]);
+  const entita = Object.entries(mappa);
+  const modificato = testo !== doc.testo_pseudonimizzato || JSON.stringify(mappa) !== JSON.stringify(doc.mappa_entita);
   return (
     <Dialog open={aperto} onOpenChange={setAperto}>
       <DialogTrigger asChild>
@@ -870,9 +955,11 @@ function RevisionePrivacy({
 
         <PrivacyReportAlert report={doc.privacy_report} />
 
-        <ScrollArea className="max-h-48 rounded-md border p-3">
-          <p className="whitespace-pre-wrap text-sm">{doc.testo_pseudonimizzato || "—"}</p>
-        </ScrollArea>
+        <Textarea
+          value={testo}
+          onChange={(e) => setTesto(e.target.value)}
+          className="max-h-56 min-h-40 font-mono text-xs"
+        />
 
         {entita.length > 0 && (
           <ScrollArea className="max-h-40 rounded-md border">
@@ -881,7 +968,13 @@ function RevisionePrivacy({
                 {entita.map(([k, v]) => (
                   <TableRow key={k}>
                     <TableCell className="font-mono text-xs">{k}</TableCell>
-                    <TableCell className="text-sm">{v}</TableCell>
+                    <TableCell>
+                      <Input
+                        value={v}
+                        onChange={(e) => setMappa((prev) => ({ ...prev, [k]: e.target.value }))}
+                        className="h-8 text-sm"
+                      />
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -898,6 +991,13 @@ function RevisionePrivacy({
             }}
           >
             Accetta senza verifica
+          </Button>
+          <Button
+            variant="outline"
+            disabled={!modificato}
+            onClick={() => onSalva(doc.id, { testo_pseudonimizzato: testo, mappa_entita: mappa })}
+          >
+            Salva correzioni
           </Button>
           <Button
             onClick={() => {
@@ -1176,10 +1276,25 @@ function RichiesteSection({
                 <Badge variant="secondary" className="capitalize">
                   {r.parte_richiedente}
                 </Badge>
+                <Badge variant={r.tipo === "riconvenzionale" ? "default" : "outline"}>
+                  {TIPO_RICHIESTA[r.tipo]}
+                </Badge>
+                <Badge variant={r.confidence < 0.55 ? "destructive" : "outline"}>
+                  {Math.round((r.confidence ?? 0) * 100)}%
+                </Badge>
                 <span className="text-left font-normal">{r.testo}</span>
               </span>
             </AccordionTrigger>
             <AccordionContent className="grid gap-4">
+              {r.avvisi.length > 0 &&
+                r.avvisi.map((avviso, k) => (
+                  <Alert key={k} variant="destructive">
+                    <TriangleAlert />
+                    <AlertTitle>Da rivedere</AlertTitle>
+                    <AlertDescription>{avviso}</AlertDescription>
+                  </Alert>
+                ))}
+
               <MotivazioneEditor richiesta={r} onSalva={onSalvaMotivazione} />
 
               <Separator />
@@ -1289,11 +1404,13 @@ function RicercaCard({
                   <Badge variant="secondary">{sp.origine}</Badge>
                   <Badge
                     variant={
-                      sp.fonte_affidabilita === "alta"
-                        ? "default"
-                        : sp.fonte_affidabilita === "bassa"
-                          ? "destructive"
-                          : "outline"
+                      sp.fonte_affidabilita === "insufficiente"
+                        ? "destructive"
+                        : sp.fonte_affidabilita === "alta"
+                          ? "default"
+                          : sp.fonte_affidabilita === "bassa"
+                            ? "destructive"
+                            : "outline"
                     }
                   >
                     {sp.fonte_label}

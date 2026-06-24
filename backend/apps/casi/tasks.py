@@ -10,18 +10,52 @@ from django.db import transaction
 from ai.factory import get_anonymization_service, get_ocr_backend
 
 from .models import Documento, Lavoro
-from .privacy import maschera_residui, normalizza_entita, normalizza_spazi_placeholder
+from .privacy import (
+    gruppo_placeholder,
+    maschera_residui,
+    normalizza_entita,
+    normalizza_spazi_placeholder,
+)
 from .services.extraction import estrai_testo
 
 logger = logging.getLogger(__name__)
 
 _RE_GRUPPO = re.compile(r"\[(.+)_\d+\]")
+_FUZZY_GROUPS = {"ORG", "ORGANIZATION", "PERSON", "PRIVATE_PERSON"}
 
 
 def _gruppo(placeholder: str) -> str:
     """Estrae il gruppo da un placeholder, es. '[PRIVATE_PERSON_3]' -> 'PRIVATE_PERSON'."""
     m = _RE_GRUPPO.match(placeholder)
     return m.group(1) if m else "ENTITA"
+
+
+def _pulisci_valore_entita(valore: str) -> str:
+    """Ripulisce valori spurii del privacy-filter, spesso preceduti da intestazioni."""
+    righe = [r.strip(" \t:-") for r in (valore or "").splitlines() if r.strip()]
+    if righe:
+        valore = righe[-1]
+    valore = re.sub(r"\s+", " ", valore or "").strip()
+    return valore
+
+
+def _token_match(norm: str, norm_esistente: str, gruppo: str) -> bool:
+    if gruppo not in _FUZZY_GROUPS:
+        return False
+    tokens = {t for t in norm.split() if not t.isdecimal()}
+    tokens_esistenti = {t for t in norm_esistente.split() if not t.isdecimal()}
+    if not tokens or not tokens_esistenti:
+        return False
+    if gruppo in {"ORG", "ORGANIZATION"} and (norm in norm_esistente or norm_esistente in norm):
+        return True
+    inter = tokens & tokens_esistenti
+    base = min(len(tokens), len(tokens_esistenti))
+    # Match fuzzy solo con sovrapposizione forte. Per persone evita di unire due
+    # soggetti diversi sul solo cognome; per organizzazioni consente varianti di
+    # ragione sociale già normalizzate (es. "Alfa" vs "Alfa Costruzioni").
+    if gruppo in {"PERSON", "PRIVATE_PERSON"}:
+        return base >= 2 and len(inter) / base >= 0.8
+    return len(inter) / base >= 0.75
 
 
 def _canonicalizza(lavoro: Lavoro, testo: str, mappa: dict) -> tuple[str, dict]:
@@ -33,9 +67,11 @@ def _canonicalizza(lavoro: Lavoro, testo: str, mappa: dict) -> tuple[str, dict]:
     """
     registro = dict(lavoro.mappa_entita)  # canonico -> reale
     inverso = {v: k for k, v in registro.items()}
-    inverso_norm = {
-        normalizza_entita(v): k for k, v in registro.items() if normalizza_entita(v)
-    }
+    inverso_norm: dict[str, dict[str, str]] = {}
+    for k, v in registro.items():
+        norm = normalizza_entita(v)
+        if norm:
+            inverso_norm.setdefault(gruppo_placeholder(k) or _gruppo(k), {})[norm] = k
     contatori: dict[str, int] = {}
     for ph in registro:
         g = _gruppo(ph)
@@ -52,43 +88,35 @@ def _canonicalizza(lavoro: Lavoro, testo: str, mappa: dict) -> tuple[str, dict]:
         token_di[ph] = f"\x00{i}\x00"
         testo = testo.replace(ph, token_di[ph])
 
-    def trova_canonico(reale: str) -> str | None:
+    def trova_canonico(reale: str, gruppo: str) -> str | None:
         norm = normalizza_entita(reale)
         if not norm:
             return None
-        if norm in inverso_norm:
-            return inverso_norm[norm]
-        tokens = set(norm.split())
-        for norm_esistente, canonico in inverso_norm.items():
+        norm_per_gruppo = inverso_norm.get(gruppo, {})
+        if norm in norm_per_gruppo:
+            return norm_per_gruppo[norm]
+        for norm_esistente, canonico in norm_per_gruppo.items():
             if not norm_esistente:
                 continue
-            tokens_esistenti = set(norm_esistente.split())
-            if (len(tokens) > 1 or len(tokens_esistenti) > 1) and (
-                norm in norm_esistente or norm_esistente in norm
-            ):
+            if _token_match(norm, norm_esistente, gruppo):
                 return canonico
-            if tokens and tokens_esistenti:
-                inter = tokens & tokens_esistenti
-                base = min(len(tokens), len(tokens_esistenti))
-                if base and len(inter) / base >= 0.75:
-                    return canonico
         return None
 
     # Fase 2: token -> placeholder canonico.
     for ph, reale in mappa.items():
-        reale_n = (reale or "").strip()
-        canon = inverso.get(reale_n) or trova_canonico(reale_n)
+        reale_n = _pulisci_valore_entita(reale or "")
+        g = _gruppo(ph)
+        canon = inverso.get(reale_n) or trova_canonico(reale_n, g)
         if not canon:
-            g = _gruppo(ph)
             contatori[g] = contatori.get(g, 0) + 1
             canon = f"[{g}_{contatori[g]}]"
             registro[canon] = reale_n
             inverso[reale_n] = canon
             norm = normalizza_entita(reale_n)
             if norm:
-                inverso_norm[norm] = canon
+                inverso_norm.setdefault(g, {})[norm] = canon
         testo = testo.replace(token_di[ph], canon)
-        doc_map[canon] = reale_n
+        doc_map[canon] = registro.get(canon, reale_n)
 
     testo = normalizza_spazi_placeholder(maschera_residui(testo, registro))
     lavoro.mappa_entita = registro

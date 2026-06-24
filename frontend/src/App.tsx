@@ -2,7 +2,7 @@ import { Suspense, lazy, useEffect, useState, type ReactNode } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import { Moon, ShieldAlert, Sun } from "lucide-react";
 import { api } from "@/api";
-import type { Utente } from "@/types";
+import type { HealthAi, Utente } from "@/types";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
@@ -58,6 +58,7 @@ function TemaToggle() {
 
 export function App() {
   const [utente, setUtente] = useState<Utente | null>(null);
+  const [health, setHealth] = useState<HealthAi | null>(null);
   const [pronto, setPronto] = useState(false);
   const navigate = useNavigate();
 
@@ -68,6 +69,17 @@ export function App() {
       .catch(() => setUtente(null))
       .finally(() => setPronto(true));
   }, []);
+
+  useEffect(() => {
+    if (!utente) {
+      setHealth(null);
+      return;
+    }
+    api
+      .get<HealthAi>("/health/ai/")
+      .then(setHealth)
+      .catch(() => setHealth(null));
+  }, [utente]);
 
   async function logout() {
     await api.post("/auth/logout/");
@@ -115,6 +127,20 @@ export function App() {
             <AlertTitle>Trattamento dati personali</AlertTitle>
             <AlertDescription>{WARNING_GDPR}</AlertDescription>
           </Alert>
+
+          {utente && health && !health.ok && (
+            <Alert variant="destructive" className="mb-8">
+              <ShieldAlert />
+              <AlertTitle>Ambiente locale da verificare</AlertTitle>
+              <AlertDescription>
+                {Object.entries(health.checks)
+                  .filter(([, c]) => !c.ok)
+                  .map(([nome, c]) => `${nome}: ${c.detail}`)
+                  .join(" · ")}
+                {health.hint ? ` ${health.hint}` : ""}
+              </AlertDescription>
+            </Alert>
+          )}
 
           <Suspense fallback={<div className="h-32 animate-pulse rounded-md bg-muted" />}>
             {!utente ? (

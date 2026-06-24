@@ -47,7 +47,16 @@ export class ApiError extends Error {
 
 async function download(path: string, filename: string): Promise<void> {
   const res = await fetch("/api" + path, { credentials: "include" });
-  if (!res.ok) throw new ApiError(res.status, res.statusText);
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const data = await res.json();
+      detail = data.detail ?? JSON.stringify(data);
+    } catch {
+      /* ignore */
+    }
+    throw new ApiError(res.status, detail);
+  }
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");

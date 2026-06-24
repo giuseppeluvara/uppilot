@@ -119,6 +119,19 @@ def upsert_nodo(
     if not creato and sintesi and not nodo.sintesi:
         nodo.sintesi = sintesi.strip()
         nodo.save(update_fields=["sintesi"])
+    if not creato and chiave and chiave.startswith("caso:"):
+        campi = []
+        if etichetta and nodo.etichetta != etichetta:
+            nodo.etichetta = etichetta
+            campi.append("etichetta")
+        if sintesi and nodo.sintesi != sintesi.strip():
+            nodo.sintesi = sintesi.strip()
+            campi.append("sintesi")
+        if lavoro is not None and nodo.lavoro_id != lavoro.id:
+            nodo.lavoro = lavoro
+            campi.append("lavoro")
+        if campi:
+            nodo.save(update_fields=campi)
     return nodo
 
 
@@ -178,6 +191,15 @@ SCHEMA_CASO = {
 }
 
 _RE_RIFERIMENTO = re.compile(r"\bart\.?\b|c\.?c\.?|c\.?p\.?c\.?|cost", re.IGNORECASE)
+_TAG_CASO = (
+    ("appalto", "appalto"),
+    ("condomin", "condominio"),
+    ("locazion", "locazione"),
+    ("responsabil", "responsabilità"),
+    ("inademp", "inadempimento"),
+    ("risoluzion", "risoluzione"),
+    ("pagamento", "pagamento"),
+)
 
 
 def _testo_analisi(lavoro) -> tuple[str, str]:
@@ -194,6 +216,23 @@ def _testo_analisi(lavoro) -> tuple[str, str]:
             parti.append(r.onere_probatorio)
         parti.extend(r.quesiti_aperti or [])
     return "\n".join(parti), in_fatto
+
+
+def _tag_non_identificante(testo: str) -> str:
+    basso = testo.casefold()
+    for needle, tag in _TAG_CASO:
+        if needle in basso:
+            return tag
+    return ""
+
+
+def _riferimento_presente(etichetta: str, testo: str) -> bool:
+    if not _RE_RIFERIMENTO.search(etichetta):
+        return True
+    chiave = normalizza_chiave(etichetta)
+    corpo = normalizza_chiave(testo)
+    parti = [p for p in chiave.split() if p not in {"art", "cc", "cpc", "cost"}]
+    return bool(parti) and all(p in corpo for p in parti[:2])
 
 
 def estrai_grafo_lavoro(lavoro, llm: LLMBackend) -> None:
@@ -213,8 +252,9 @@ def estrai_grafo_lavoro(lavoro, llm: LLMBackend) -> None:
     )
     dati = _estrai_json(grezzo)
 
+    tag = _tag_non_identificante(testo)
     caso = upsert_nodo(
-        f"Fascicolo #{lavoro.id}",
+        f"Fascicolo #{lavoro.id}" + (f" - {tag}" if tag else ""),
         tipo=Nodo.Tipo.CASO,
         sintesi=in_fatto[:240],
         lavoro=lavoro,
@@ -225,6 +265,8 @@ def estrai_grafo_lavoro(lavoro, llm: LLMBackend) -> None:
     for ref in dati.get("riferimenti", []):
         etichetta = str(ref).strip()
         if not etichetta:
+            continue
+        if not _riferimento_presente(etichetta, testo):
             continue
         tipo = Nodo.Tipo.RIFERIMENTO if _RE_RIFERIMENTO.search(etichetta) else Nodo.Tipo.CONCETTO
         nodo = upsert_nodo(etichetta, tipo)

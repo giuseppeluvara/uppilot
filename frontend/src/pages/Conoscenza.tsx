@@ -4,7 +4,7 @@ import Sigma from "sigma";
 import forceAtlas2 from "graphology-layout-forceatlas2";
 import louvain from "graphology-communities-louvain";
 import circular from "graphology-layout/circular";
-import { Loader2, Network, RefreshCw, Search, Trash2, X } from "lucide-react";
+import { Ban, Loader2, Network, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { api, ApiError } from "@/api";
 import type { ArcoGrafo, Grafo, NodoGrafo, StatoGrafo } from "@/types";
 import { cn } from "@/lib/utils";
@@ -42,6 +42,7 @@ export function Conoscenza() {
   );
   const [query, setQuery] = useState("");
   const [costruendo, setCostruendo] = useState(false);
+  const [scope, setScope] = useState<"tutto" | "corpus" | "fascicoli">("tutto");
 
   const container = useRef<HTMLDivElement>(null);
   const sigma = useRef<Sigma | null>(null);
@@ -75,7 +76,10 @@ export function Conoscenza() {
     const q = query.trim().toLowerCase();
     if (!q || !grafo) return [];
     return grafo.nodi
-      .filter((n) => tipiAttivi.has(n.tipo) && n.etichetta.toLowerCase().includes(q))
+      .filter((n) => {
+        const testo = [n.etichetta, n.sintesi, n.documento_titolo, n.snippet].join(" ").toLowerCase();
+        return tipiAttivi.has(n.tipo) && testo.includes(q);
+      })
       .slice(0, 8);
   }, [query, grafo, tipiAttivi]);
 
@@ -163,7 +167,7 @@ export function Conoscenza() {
   async function aggiorna() {
     setCostruendo(true);
     try {
-      await api.post("/grafo/costruisci/");
+      await api.post("/grafo/costruisci/", { scope });
       toast.info("Costruzione del grafo avviata…");
       for (let i = 0; i < 120; i++) {
         await new Promise((r) => setTimeout(r, 3000));
@@ -177,6 +181,17 @@ export function Conoscenza() {
       toast.error(err instanceof ApiError ? err.message : "Operazione non riuscita.");
     } finally {
       setCostruendo(false);
+    }
+  }
+
+  async function annulla() {
+    try {
+      await api.post("/grafo/annulla/");
+      setCostruendo(false);
+      await carica();
+      toast.success("Costruzione interrotta");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Operazione non riuscita.");
     }
   }
 
@@ -234,6 +249,23 @@ export function Conoscenza() {
                 className="h-9 w-48 pl-8"
               />
             </form>
+            <select
+              value={scope}
+              onChange={(e) => setScope(e.target.value as "tutto" | "corpus" | "fascicoli")}
+              className="h-9 rounded-md border bg-background px-2 text-sm"
+              aria-label="Ambito costruzione grafo"
+              disabled={costruzioneAttiva}
+            >
+              <option value="tutto">Tutto</option>
+              <option value="corpus">Solo corpus</option>
+              <option value="fascicoli">Solo fascicoli</option>
+            </select>
+            {costruzioneAttiva && (
+              <Button variant="outline" onClick={annulla}>
+                <Ban />
+                Interrompi
+              </Button>
+            )}
             <Button onClick={aggiorna} disabled={costruzioneAttiva}>
               {costruzioneAttiva ? <Loader2 className="animate-spin" /> : <RefreshCw />}
               {costruzioneAttiva ? "Costruzione…" : "Aggiorna grafo"}
@@ -269,6 +301,22 @@ export function Conoscenza() {
                   className="h-full rounded-full bg-primary transition-all"
                   style={{ width: `${Math.max(0, Math.min(100, progresso.percentuale ?? 0))}%` }}
                 />
+              </div>
+            </div>
+          )}
+
+          {stato?.changelog && stato.changelog.length > 0 && (
+            <div className="rounded-lg border p-3">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Ultimi aggiornamenti
+              </p>
+              <div className="mt-2 grid gap-1 text-sm">
+                {stato.changelog.slice(-6).map((r, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <Badge variant={r.stato === "errore" ? "destructive" : "outline"}>{r.stato}</Badge>
+                    <span className="text-muted-foreground">{r.evento}</span>
+                  </div>
+                ))}
               </div>
             </div>
           )}
@@ -325,8 +373,19 @@ export function Conoscenza() {
                     </Button>
                   </div>
                   <p className="mt-2 font-medium">{nodoSelezionato.etichetta}</p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <Badge variant="outline">{nodoSelezionato.origine}</Badge>
+                    {nodoSelezionato.documento_titolo && (
+                      <span className="text-xs text-muted-foreground">{nodoSelezionato.documento_titolo}</span>
+                    )}
+                  </div>
                   {nodoSelezionato.sintesi && (
                     <p className="mt-1 text-sm text-muted-foreground">{nodoSelezionato.sintesi}</p>
+                  )}
+                  {nodoSelezionato.snippet && nodoSelezionato.snippet !== nodoSelezionato.sintesi && (
+                    <p className="mt-2 rounded-md bg-muted/40 p-2 text-xs text-muted-foreground">
+                      {nodoSelezionato.snippet}
+                    </p>
                   )}
                   {vicini.length > 0 && (
                     <>

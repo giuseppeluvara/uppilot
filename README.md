@@ -71,7 +71,7 @@ make license                    # scarica il testo canonico AGPL-3.0
 make provision                  # scarica i pesi dei modelli (glm-ocr, LLM, privacy-filter)
 
 # Mac Apple Silicon (Ollama sull'host):
-ollama serve                    # in un terminale a parte
+OLLAMA_HOST=0.0.0.0:11434 ollama serve  # in un terminale a parte
 make up-mac
 
 # Linux/server con GPU NVIDIA:
@@ -79,6 +79,29 @@ make up-gpu
 ```
 
 Servizi esposti in dev: frontend `:5173`, backend API `:8000`, privacy-filter `:8001`.
+
+### Mac: servizi locali al riavvio
+
+Su Mac Ollama gira sull'host, non nel `docker-compose`, quindi deve ascoltare su tutte le
+interfacce locali per essere raggiungibile dai container:
+
+```bash
+OLLAMA_HOST=0.0.0.0:11434 ollama serve
+curl http://localhost:11434/api/tags
+docker compose exec -T worker python - <<'PY'
+import urllib.request
+urllib.request.urlopen("http://host.docker.internal:11434/api/tags", timeout=5)
+print("Ollama raggiungibile dal worker")
+PY
+```
+
+Nel workspace è presente `scripts/uppilot-redis-at-login.sh`: può essere richiamato da un
+LaunchAgent utente per riattivare il Redis del progetto dopo il login, attendendo Docker Desktop
+se non è ancora pronto. In questa macchina sono stati configurati due LaunchAgent utente:
+`com.uppilot.ollama` (Ollama persistente) e `com.uppilot.redis` (Redis del compose).
+
+La UI espone inoltre un preflight ambiente (`/api/health/ai/`) che controlla DB, Redis,
+privacy-filter, Ollama e modelli configurati prima di lanciare task lunghi.
 
 ---
 
@@ -109,31 +132,36 @@ obbligatorio** (pseudonimizzazione) con flusso di verifica/accettazione e avviso
 analisi LLM locale: sintesi **"in fatto"** + estrazione strutturata delle **richieste** delle parti;
 editor; archivio storico.
 
-**M2** — ragionamento **"in diritto"** per richiesta (onere probatorio, non contestazioni, allegati,
-quesiti); **export `.docx`** (anche versione "in chiaro" de-pseudonimizzata); **ricerca giuridica
+**M2** — ragionamento **"in diritto"** per richiesta (tipo domanda/difesa/riconvenzionale/istanza,
+onere probatorio, non contestazioni filtrate, allegati pertinenti, confidenza e avvisi di coerenza);
+**export `.docx`** (anche versione "in chiaro" de-pseudonimizzata); **ricerca giuridica
 "spunti"** (web o incolla manuale; la query esce sempre pseudonimizzata); **LLM commerciali opt-in**
 (SDK Anthropic); **RAG** su pgvector (corpus globale o personale di normativa/giurisprudenza,
 ricerca semantica a supporto dell'analisi "in diritto").
 
 **Grafo della conoscenza** — mappa navigabile di istituti, riferimenti normativi e **casi
 anonimizzati**, costruita dal **LLM locale** sul corpus e sull'analisi (solo testo pseudonimizzato).
-Visualizzazione interattiva (community detection a colori, ForceAtlas2) con filtri, ricerca e
-pannello di dettaglio. La costruzione e la consultazione rispettano i permessi su casi e corpus.
+Visualizzazione interattiva (community detection a colori, ForceAtlas2) con filtri, ricerca,
+scope di ricostruzione, interruzione, changelog e pannello di dettaglio con origine/snippet. La
+costruzione e la consultazione rispettano i permessi su casi e corpus.
 Implementazione nativa ispirata a `nashsu/llm_wiki` (nessun codice GPL; solo librerie viz MIT).
 È un ausilio alla consultazione, non una fonte di conclusioni (§1).
 
 **Affinamenti** — etichette PII italiane (C.F. / P.IVA / IBAN / PEC / ragioni sociali); resilienza
 dell'anonimizzazione (retry automatico + "Riprova" per documento); placeholder canonici per lavoro
 (coerenti tra documenti con matching normalizzato/fuzzy controllato, abilitano l'export in chiaro);
-controllo privacy deterministico su residui e placeholder malformati prima di revisione/export;
+controllo privacy deterministico su residui noti, candidati PII sconosciuti e placeholder
+malformati prima di revisione/export; revisione manuale del testo pseudonimizzato e della mappa;
+blocco server-side dell'export pseudonimizzato se il report privacy non è pulito salvo override;
 export `.docx` pseudonimizzato senza titolo reale o nomi file identificativi, più versione "in chiaro"
 con avviso; estrazione richieste robusta (due chiamate LLM focalizzate + schema vincolante);
 fasi asincrone protette da doppio avvio, interrompibili dalla UI e con progresso persistente
 (analisi, approfondimento, ricerca, grafo); analisi parziale possibile solo con conferma esplicita;
 editor completo (motivazione "in diritto" + P.Q.M.) con layout mobile più gestibile; anteprima
-documenti; ricerca nell'archivio; corpus con upload file, categorie, rilevanza leggibile e permessi
-di visibilità/eliminazione; ricerca giuridica con etichette di affidabilità fonte; grafo con colori
-robusti, progressi e risultati di ricerca cliccabili; tema chiaro/scuro, upload multiplo drag & drop
+documenti; ricerca nell'archivio; corpus con upload file, categorie, soglia di rilevanza e permessi
+di visibilità/eliminazione; ricerca giuridica con etichette di affidabilità fonte e stato
+"ricerca insufficiente" quando non esistono fonti verificabili; grafo con colori robusti, progressi,
+scope, annullamento e risultati di ricerca cliccabili; tema chiaro/scuro, upload multiplo drag & drop
 e caricamento lazy delle schermate frontend.
 
 ## Stato

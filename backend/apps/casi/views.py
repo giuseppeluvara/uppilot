@@ -150,7 +150,7 @@ class DocumentoViewSet(
 ):
     """Upload e consultazione dei documenti dell'utente."""
 
-    parser_classes = [MultiPartParser, FormParser]
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
 
     def get_serializer_class(self):
         if self.action == "create":
@@ -176,6 +176,43 @@ class DocumentoViewSet(
             )
         documento.stato_accettazione = nuovo_stato
         documento.save(update_fields=["stato_accettazione"])
+        return Response(DocumentoSerializer(documento).data)
+
+    @action(detail=True, methods=["patch"], url_path="privacy")
+    def privacy(self, request, pk=None):
+        """Correzione manuale del testo pseudonimizzato e della mappa entità."""
+        documento = self.get_object()
+        testo = request.data.get("testo_pseudonimizzato")
+        mappa = request.data.get("mappa_entita")
+        campi: list[str] = []
+
+        if testo is not None:
+            documento.testo_pseudonimizzato = str(testo)
+            documento.pseudonimizzato = bool(str(testo).strip())
+            campi.extend(["testo_pseudonimizzato", "pseudonimizzato"])
+        if mappa is not None:
+            if not isinstance(mappa, dict):
+                return Response(
+                    {"detail": "mappa_entita deve essere un oggetto chiave/valore."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            documento.mappa_entita = {str(k): str(v) for k, v in mappa.items()}
+            campi.append("mappa_entita")
+
+        if campi:
+            # Ogni modifica manuale richiede nuova conferma: evita che un documento
+            # già accettato resti utilizzabile dopo una correzione non revisionata.
+            documento.stato_accettazione = Documento.StatoAccettazione.DA_VERIFICARE
+            if "stato_accettazione" not in campi:
+                campi.append("stato_accettazione")
+            documento.save(update_fields=campi)
+
+            lavoro = documento.sezione.lavoro
+            registro = dict(lavoro.mappa_entita or {})
+            registro.update(documento.mappa_entita or {})
+            lavoro.mappa_entita = registro
+            lavoro.save(update_fields=["mappa_entita", "updated_at"])
+
         return Response(DocumentoSerializer(documento).data)
 
     @action(detail=True, methods=["post"])

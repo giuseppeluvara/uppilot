@@ -51,6 +51,7 @@ export function Corpus() {
   const [file, setFile] = useState<File | null>(null);
   const [filtroCat, setFiltroCat] = useState("");
   const [query, setQuery] = useState("");
+  const [includiBassa, setIncludiBassa] = useState(false);
   const [risultati, setRisultati] = useState<RisultatoCorpus[] | null>(null);
   const [cercando, setCercando] = useState(false);
   const [daEliminare, setDaEliminare] = useState<DocumentoCorpus | null>(null);
@@ -144,7 +145,8 @@ export function Corpus() {
     if (!query.trim()) return;
     setCercando(true);
     try {
-      const params = new URLSearchParams({ q: query, k: "5" });
+      const params = new URLSearchParams({ q: query, k: "8" });
+      if (!includiBassa) params.set("max_distanza", "0.38");
       setRisultati(await api.get<RisultatoCorpus[]>(`/corpus/cerca/?${params}`));
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "Ricerca non riuscita.");
@@ -239,6 +241,14 @@ export function Corpus() {
               Cerca
             </Button>
           </form>
+          <label className="flex items-center gap-2 text-sm text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={includiBassa}
+              onChange={(e) => setIncludiBassa(e.target.checked)}
+            />
+            Includi risultati a bassa rilevanza
+          </label>
 
           {risultati !== null &&
             (risultati.length === 0 ? (

@@ -54,7 +54,8 @@ soli. Se l'anonimizzazione fallisce, compare **"Anonimizzazione fallita"** con i
 
 ### d) Verifica e accetta i documenti
 Per ogni documento pseudonimizzato puoi:
-- **Rivedi anonimizzazione** → vedi il testo mascherato e la mappa delle entità;
+- **Rivedi anonimizzazione** → vedi e puoi correggere il testo mascherato e la mappa delle entità;
+- **Salva correzioni** se noti un residuo o una mappatura errata, poi conferma di nuovo;
 - **Confermo, verificato** oppure **Accetta senza verifica** (o **Accetta tutti**).
 
 > Solo i documenti **accettati** entrano nelle fasi successive.
@@ -63,8 +64,9 @@ Per ogni documento pseudonimizzato puoi:
 Premi **Avvia analisi**. Se il pulsante non è attivo, il riquadro sopra l'analisi indica cosa manca
 (di solito almeno un documento accettato). Il sistema produce:
 - la **bozza "in fatto"** (modificabile);
-- l'elenco delle **richieste delle parti**, con gli elementi di supporto (onere probatorio, non
-  contestazioni, allegati) e i **quesiti** da decidere.
+- l'elenco delle **richieste delle parti**, classificate per tipo (domanda, difesa/eccezione,
+  riconvenzionale, istruttoria), con confidenza, avvisi di coerenza, onere probatorio, non
+  contestazioni filtrate, allegati pertinenti e **quesiti** da decidere.
 
 Se hai avviato l'analisi per errore o vuoi modificare prima i documenti, premi **Interrompi** mentre
 la fase è in corso.
@@ -77,7 +79,9 @@ può essere interrotta con **Interrompi** mentre è in corso.
 ### g) Spunti di ricerca (facoltativo)
 Nella sezione spunti puoi **Cercare sul web** o **Incollare risultati** trovati altrove: il
 sistema ne ricava suggerimenti (non citazioni definitive). La query esce sempre pseudonimizzata.
-La ricerca in corso può essere fermata con **Interrompi**.
+Se la ricerca web non restituisce fonti verificabili, lo spunto viene marcato come
+**Ricerca insufficiente**: riformula la query o incolla risultati manuali. La ricerca in corso può
+essere fermata con **Interrompi**.
 
 ### h) P.Q.M. ed esportazione
 - Compila il **P.Q.M.** nel riquadro in fondo.
@@ -85,6 +89,8 @@ La ricerca in corso può essere fermata con **Interrompi**.
   - **Scarica Word** → bozza **pseudonimizzata** (placeholder al posto dei dati);
   - **In chiaro** ⚠️ → bozza con i **dati reali** delle parti (de-pseudonimizzata) — da trattare
     con cautela.
+Se il controllo privacy segnala residui, l'export pseudonimizzato chiede un override esplicito:
+meglio rientrare in **Rivedi anonimizzazione** e correggere prima.
 
 ### i) Corpus di riferimento (facoltativo, migliora l'analisi)
 Dalla voce **Corpus** puoi caricare normativa/giurisprudenza (testo manuale o file `pdf`, `txt`,
@@ -147,7 +153,8 @@ cat backup_uppilot.sql | docker compose exec -T db psql -U uppilot uppilot
 | Sintomo | Cosa fare |
 |---|---|
 | La pagina `:5173` non si apre | Attendi 1 minuto e ricarica. Verifica che **Docker Desktop** sia avviato (icona nella barra in alto). |
-| L'analisi resta "in corso" o va in errore | Se devi fermarla subito premi **Interrompi**. Se il problema si ripete, serve **Ollama** attivo sull'host: verifica con `ollama list` nel Terminale; se manca un modello, rilancia `make provision`. |
+| Compare "Ambiente locale da verificare" | Leggi il dettaglio nel banner: indica se mancano Redis, privacy-filter, Ollama o un modello locale. |
+| L'analisi resta "in corso" o va in errore | Se devi fermarla subito premi **Interrompi**. Se il problema si ripete, serve **Ollama** attivo sull'host e visibile ai container: avvia con `OLLAMA_HOST=0.0.0.0:11434 ollama serve`; se manca un modello, rilancia `make provision`. |
 | "Anonimizzazione fallita" su un documento | Premi **Riprova**. Su PC senza GPU il filtro è più lento: riprova a documento. |
 | L'opzione LLM commerciale dà errore | Manca la **chiave API**: impostala in `.env` (`COMMERCIAL_LLM_API_KEY`) e riavvia (`make up-mac`). |
 | Voglio ripartire da zero | `make down` poi `make up-mac`. (Per cancellare anche i dati: `docker compose down -v` — **attenzione, elimina tutto**.) |

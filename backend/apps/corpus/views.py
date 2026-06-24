@@ -114,7 +114,8 @@ class IngestView(APIView):
         )
         indicizza_documento_task.delay(doc.id)
         return Response(
-            DocumentoCorpusSerializer(doc).data, status=status.HTTP_202_ACCEPTED
+            DocumentoCorpusSerializer(doc, context={"request": request}).data,
+            status=status.HTTP_202_ACCEPTED,
         )
 
 
@@ -165,9 +166,15 @@ class CercaView(APIView):
             k = min(max(int(request.query_params.get("k", 5)), 1), 20)
         except ValueError:
             k = 5
+        try:
+            max_distanza = float(request.query_params.get("max_distanza", ""))
+        except ValueError:
+            max_distanza = None
         frammenti = cerca(
             query, get_embedding_backend(), k=k, documenti=_documenti_visibili(request.user)
         )
+        if max_distanza is not None:
+            frammenti = [f for f in frammenti if float(f.distanza) <= max_distanza]
 
         def rilevanza(distanza: float) -> str:
             if distanza <= 0.28:

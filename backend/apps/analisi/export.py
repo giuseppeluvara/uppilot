@@ -197,6 +197,20 @@ def genera_docx(lavoro, in_chiaro: bool = False) -> bytes:
         parte = _PARTE_LABEL.get(r.parte_richiedente, r.parte_richiedente)
         doc.add_heading(f"{i}. Domanda di parte {parte}", level=2)
         doc.add_paragraph(chiaro(r.testo))
+        meta = doc.add_paragraph()
+        meta.add_run("Tipo: ").bold = True
+        meta.add_run(getattr(r, "get_tipo_display", lambda: r.tipo)())
+        meta.add_run(" · Confidenza: ").bold = True
+        meta.add_run(f"{round((r.confidence or 0) * 100)}%")
+
+        for flag in r.flags or []:
+            fp = doc.add_paragraph(style="Quesito")
+            _ombreggia(fp, _QUESITO_FILL)
+            _bordo_sinistro(fp, _QUESITO_BORDO)
+            label = fp.add_run("Da rivedere: ")
+            label.bold = True
+            label.font.color.rgb = _QUESITO_LABEL
+            fp.add_run(chiaro(str(flag)))
 
         if r.motivazione:
             doc.add_paragraph(chiaro(r.motivazione))
