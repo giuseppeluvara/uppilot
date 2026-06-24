@@ -30,8 +30,20 @@ def _set_progress(meta: GrafoMeta, fase: str, corrente: int, totale: int, messag
     meta.save(update_fields=["progresso", "aggiornato_at"])
 
 
+def _log(meta: GrafoMeta, evento: str, stato: str = "ok") -> None:
+    changelog = list(meta.changelog or [])
+    changelog.append({"evento": evento, "stato": stato})
+    meta.changelog = changelog[-100:]
+    meta.save(update_fields=["changelog", "aggiornato_at"])
+
+
 @shared_task
-def costruisci_grafo_task(commerciale: bool = False, utente_id: int | None = None) -> None:
+def costruisci_grafo_task(
+    commerciale: bool = False,
+    utente_id: int | None = None,
+    scope: str = "tutto",
+    lavoro_id: int | None = None,
+) -> None:
     """Costruisce/aggiorna il grafo dal corpus (condiviso) e dai casi dell'utente.
 
     I nodi del corpus sono globali; i nodi-caso restano legati all'utente che li ha
@@ -39,6 +51,7 @@ def costruisci_grafo_task(commerciale: bool = False, utente_id: int | None = Non
     """
     meta = GrafoMeta.singleton()
     meta.in_corso = True
+    meta.changelog = []
     meta.progresso = {
         "fase": "preparazione",
         "corrente": 0,
@@ -46,22 +59,25 @@ def costruisci_grafo_task(commerciale: bool = False, utente_id: int | None = Non
         "percentuale": 0,
         "messaggio": "Preparazione corpus e fascicoli",
     }
-    meta.save(update_fields=["in_corso", "progresso", "aggiornato_at"])
+    meta.save(update_fields=["in_corso", "changelog", "progresso", "aggiornato_at"])
     try:
         llm = get_llm_backend(commerciale)
-        corpus = DocumentoCorpus.objects.filter(stato=DocumentoCorpus.Stato.COMPLETATO)
-        if utente_id is not None:
+        corpus = DocumentoCorpus.objects.none()
+        if scope in {"tutto", "corpus"}:
+            corpus = DocumentoCorpus.objects.filter(stato=DocumentoCorpus.Stato.COMPLETATO)
+        if utente_id is not None and scope in {"tutto", "corpus"}:
             user = get_user_model().objects.filter(pk=utente_id).first()
             if user and not user.is_staff:
                 corpus = corpus.filter(Q(creato_da__isnull=True) | Q(creato_da_id=utente_id))
         corpus = list(corpus)
         lavori = []
-        if utente_id is not None:
-            lavori = list(
-                Lavoro.objects.filter(
-                    utente_id=utente_id, analisi_stato=Lavoro.StatoAnalisi.COMPLETATA
-                ).prefetch_related("richieste")
-            )
+        if utente_id is not None and scope in {"tutto", "fascicoli", "lavoro"}:
+            qs = Lavoro.objects.filter(
+                utente_id=utente_id, analisi_stato=Lavoro.StatoAnalisi.COMPLETATA
+            ).prefetch_related("richieste")
+            if scope == "lavoro" and lavoro_id is not None:
+                qs = qs.filter(pk=lavoro_id)
+            lavori = list(qs)
         totale = max(len(corpus) + len(lavori), 1)
         corrente = 0
         for doc in corpus:
@@ -74,8 +90,10 @@ def costruisci_grafo_task(commerciale: bool = False, utente_id: int | None = Non
             )
             try:
                 estrai_grafo_corpus(doc, llm)
+                _log(meta, f"Corpus #{doc.id}: {doc.titolo}", "ok")
             except Exception:  # noqa: BLE001 - un documento non deve fermare il resto
                 logger.exception("Estrazione grafo fallita per il corpus %s", doc.id)
+                _log(meta, f"Corpus #{doc.id}: {doc.titolo}", "errore")
             corrente += 1
             _set_progress(meta, "corpus", corrente, totale, "Documento corpus completato")
         for lavoro in lavori:
@@ -88,12 +106,15 @@ def costruisci_grafo_task(commerciale: bool = False, utente_id: int | None = Non
             )
             try:
                 estrai_grafo_lavoro(lavoro, llm)
+                _log(meta, f"Fascicolo #{lavoro.id}", "ok")
             except Exception:  # noqa: BLE001
                 logger.exception("Estrazione grafo fallita per il lavoro %s", lavoro.id)
+                _log(meta, f"Fascicolo #{lavoro.id}", "errore")
             corrente += 1
             _set_progress(meta, "fascicoli", corrente, totale, "Fascicolo completato")
     finally:
         meta.in_corso = False
+        meta.task_id = ""
         meta.progresso = {
             "fase": "completata",
             "corrente": 1,
@@ -101,4 +122,4 @@ def costruisci_grafo_task(commerciale: bool = False, utente_id: int | None = Non
             "percentuale": 100,
             "messaggio": "Grafo aggiornato",
         }
-        meta.save(update_fields=["in_corso", "progresso", "aggiornato_at"])
+        meta.save(update_fields=["in_corso", "task_id", "progresso", "aggiornato_at"])

@@ -1,3 +1,5 @@
+import re
+
 from rest_framework import serializers
 from urllib.parse import urlparse
 
@@ -39,6 +41,40 @@ def _qualifica_fonte(url: str) -> tuple[str, str]:
 
 class RichiestaSerializer(serializers.ModelSerializer):
     allegati_collegati = serializers.PrimaryKeyRelatedField(many=True, read_only=True)
+    avvisi = serializers.SerializerMethodField()
+
+    _NUMERO_RE = re.compile(
+        r"(?:€\s*)?\b\d{1,3}(?:[.\s]\d{3})+(?:,\d+)?\b|\b\d+/\d{2,4}\b|"
+        r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b",
+        re.IGNORECASE,
+    )
+
+    def _numeri(self, testo: str) -> set[str]:
+        return {
+            re.sub(r"\s+", "", m.group(0).replace("€", ""))
+            for m in self._NUMERO_RE.finditer(testo or "")
+        }
+
+    def get_avvisi(self, obj):
+        avvisi = list(obj.flags or [])
+        sorgente = self._numeri(obj.testo)
+        if sorgente:
+            generati = set()
+            for testo in [
+                obj.onere_probatorio,
+                obj.motivazione,
+                "\n".join(obj.non_contestazioni or []),
+                "\n".join(obj.quesiti_aperti or []),
+            ]:
+                generati |= self._numeri(testo)
+            estranei = sorted(generati - sorgente)
+            if estranei:
+                avvisi.append(
+                    "Numeri/importi da verificare: "
+                    + ", ".join(estranei[:5])
+                    + " non compaiono nel testo della richiesta."
+                )
+        return list(dict.fromkeys(avvisi))
 
     class Meta:
         model = Richiesta
@@ -46,7 +82,11 @@ class RichiestaSerializer(serializers.ModelSerializer):
             "id",
             "ordine",
             "parte_richiedente",
+            "tipo",
             "testo",
+            "confidence",
+            "flags",
+            "avvisi",
             "stato",
             "onere_probatorio",
             "allegati_collegati",
@@ -57,7 +97,11 @@ class RichiestaSerializer(serializers.ModelSerializer):
         read_only_fields = [
             "ordine",
             "parte_richiedente",
+            "tipo",
             "testo",
+            "confidence",
+            "flags",
+            "avvisi",
             "stato",
             "onere_probatorio",
             "allegati_collegati",
@@ -77,9 +121,13 @@ class SpuntoRicercaSerializer(serializers.ModelSerializer):
     fonte_label = serializers.SerializerMethodField()
 
     def get_fonte_affidabilita(self, obj):
+        if obj.stato_fonte == SpuntoRicerca.StatoFonte.INSUFFICIENTE:
+            return "insufficiente"
         return _qualifica_fonte(obj.fonte)[0]
 
     def get_fonte_label(self, obj):
+        if obj.stato_fonte == SpuntoRicerca.StatoFonte.INSUFFICIENTE:
+            return "Ricerca insufficiente"
         return _qualifica_fonte(obj.fonte)[1]
 
     class Meta:
@@ -91,6 +139,7 @@ class SpuntoRicercaSerializer(serializers.ModelSerializer):
             "sintesi",
             "suggerimento",
             "fonte",
+            "stato_fonte",
             "fonte_affidabilita",
             "fonte_label",
             "origine",

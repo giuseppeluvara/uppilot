@@ -8,6 +8,7 @@ from rest_framework.views import APIView
 
 from ai.factory import commerciale_disponibile
 from apps.casi.models import Documento, Lavoro
+from apps.casi.privacy import privacy_report
 
 from .export import genera_docx
 from .models import Bozza, Richiesta, SpuntoRicerca
@@ -392,6 +393,33 @@ class EsportaDocxView(APIView):
     def get(self, request, lavoro_id):
         lavoro = _lavoro_utente(request, lavoro_id)
         in_chiaro = request.query_params.get("chiaro") == "1"
+        if not in_chiaro and request.query_params.get("force_privacy") != "1":
+            testi = []
+            bozza = Bozza.objects.filter(lavoro=lavoro).first()
+            if bozza:
+                testi.extend([bozza.in_fatto, bozza.pqm])
+            for r in lavoro.richieste.all():
+                testi.extend(
+                    [
+                        r.testo,
+                        r.onere_probatorio,
+                        r.motivazione,
+                        "\n".join(r.non_contestazioni or []),
+                        "\n".join(r.quesiti_aperti or []),
+                    ]
+                )
+            report = privacy_report(testi, lavoro.mappa_entita or {}, extra_values=[lavoro.titolo])
+            if not report["ok"]:
+                return Response(
+                    {
+                        "detail": (
+                            "Il controllo privacy segnala possibili residui. "
+                            "Rivedi il testo o conferma esplicitamente l'override."
+                        ),
+                        "privacy_report": report,
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
         contenuto = genera_docx(lavoro, in_chiaro=in_chiaro)
         suffisso = "_in_chiaro" if in_chiaro else ""
         resp = HttpResponse(contenuto, content_type=DOCX_CONTENT_TYPE)

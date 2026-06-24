@@ -11,11 +11,13 @@ export interface ProgressoTask {
   totale?: number;
   percentuale?: number;
   messaggio?: string;
+  aggiornato_at?: string;
 }
 
 export interface PrivacyReport {
   ok: boolean;
   leaks: { placeholder: string; token: string }[];
+  unknown_pii: { tipo: string; token: string }[];
   malformed_placeholders: string[];
   warnings: number;
 }
@@ -94,7 +96,11 @@ export interface Richiesta {
   id: number;
   ordine: number;
   parte_richiedente: "attore" | "convenuto";
+  tipo: "domanda" | "difesa_eccezione" | "riconvenzionale" | "istruttoria" | "altro";
   testo: string;
+  confidence: number;
+  flags: string[];
+  avvisi: string[];
   stato: string;
   onere_probatorio: string;
   allegati_collegati: number[];
@@ -119,7 +125,8 @@ export interface Spunto {
   sintesi: string;
   suggerimento: string;
   fonte: string;
-  fonte_affidabilita: "alta" | "media" | "bassa" | "non_indicata";
+  stato_fonte: "ok" | "insufficiente";
+  fonte_affidabilita: "alta" | "media" | "bassa" | "non_indicata" | "insufficiente";
   fonte_label: string;
   origine: "web" | "manuale";
   created_at: string;
@@ -149,7 +156,10 @@ export interface NodoGrafo {
   etichetta: string;
   sintesi: string;
   documento: number | null;
+  documento_titolo: string;
   lavoro: number | null;
+  origine: "fascicolo" | "corpus" | "globale";
+  snippet: string;
 }
 
 export interface ArcoGrafo {
@@ -170,6 +180,7 @@ export interface StatoGrafo {
   n_nodi: number;
   n_archi: number;
   progresso: ProgressoTask;
+  changelog: { evento: string; stato: "ok" | "errore" | string }[];
 }
 
 export interface RisultatoCorpus {
@@ -180,4 +191,10 @@ export interface RisultatoCorpus {
   testo: string;
   distanza: number;
   rilevanza: "alta" | "media" | "bassa";
+}
+
+export interface HealthAi {
+  ok: boolean;
+  hint: string;
+  checks: Record<string, { ok: boolean; detail: string }>;
 }

@@ -101,14 +101,27 @@ def test_estrai_grafo_lavoro_crea_caso_anonimo(django_user_model):
 
     u = django_user_model.objects.create_user(username="a", password="x")
     lav = Lavoro.objects.create(utente=u, titolo="Rossi c. Bianchi")  # titolo con nomi
-    Bozza.objects.create(lavoro=lav, in_fatto="Tra [PRIVATE_PERSON_1] e [PRIVATE_PERSON_2]...")
-    Richiesta.objects.create(lavoro=lav, parte_richiedente="attore", testo="X", ordine=0)
+    Bozza.objects.create(
+        lavoro=lav,
+        in_fatto=(
+            "Tra [PRIVATE_PERSON_1] e [PRIVATE_PERSON_2] è sorta controversia "
+            "su eccezione di inadempimento ex Art. 1460 c.c."
+        ),
+    )
+    Richiesta.objects.create(
+        lavoro=lav,
+        parte_richiedente="attore",
+        testo="Richiesta collegata all'eccezione di inadempimento.",
+        ordine=0,
+    )
 
     estrai_grafo_lavoro(
         lav, FakeLLM({"riferimenti": ["Art. 1460 c.c.", "Eccezione di inadempimento"]})
     )
     caso = Nodo.objects.get(tipo="caso", lavoro=lav)
-    assert caso.etichetta == f"Fascicolo #{lav.id}"  # ANONIMO: niente nomi delle parti
+    assert caso.etichetta.startswith(f"Fascicolo #{lav.id}")  # ANONIMO: niente nomi delle parti
+    assert "Rossi" not in caso.etichetta and "Bianchi" not in caso.etichetta
+    assert "inadempimento" in caso.etichetta
     assert Arco.objects.filter(da=caso, tipo="applica").count() == 2
 
 

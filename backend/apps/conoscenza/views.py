@@ -1,3 +1,4 @@
+from celery import current_app
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from rest_framework import status
@@ -51,7 +52,14 @@ class GrafoView(APIView):
                         "etichetta": n.etichetta,
                         "sintesi": n.sintesi,
                         "documento": n.documento_id,
+                        "documento_titolo": n.documento.titolo if n.documento_id else "",
                         "lavoro": n.lavoro_id,
+                        "origine": "fascicolo"
+                        if n.lavoro_id
+                        else "corpus"
+                        if n.documento_id
+                        else "globale",
+                        "snippet": (n.documento.testo[:240] if n.documento_id else n.sintesi[:240]),
                     }
                     for n in nodi
                 ],
@@ -74,6 +82,7 @@ class StatoView(APIView):
                 "n_nodi": len(ids),
                 "n_archi": Arco.objects.filter(da_id__in=ids, a_id__in=ids).count(),
                 "progresso": meta.progresso or {},
+                "changelog": meta.changelog or [],
             }
         )
 
@@ -82,9 +91,53 @@ class CostruisciView(APIView):
     """Avvia la (ri)costruzione del grafo (corpus + casi dell'utente; LLM locale)."""
 
     def post(self, request):
+        meta = GrafoMeta.singleton()
+        if meta.in_corso:
+            return Response(
+                {"detail": "Costruzione del grafo già in corso."},
+                status=status.HTTP_409_CONFLICT,
+            )
         commerciale = bool(request.data.get("commerciale"))
-        costruisci_grafo_task.delay(commerciale, request.user.id)
-        return Response({"detail": "Costruzione del grafo avviata."}, status=status.HTTP_202_ACCEPTED)
+        scope = request.data.get("scope") or "tutto"
+        if scope not in {"tutto", "corpus", "fascicoli", "lavoro"}:
+            return Response(
+                {"detail": "Scope non valido: usa tutto, corpus, fascicoli o lavoro."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        lavoro_id = request.data.get("lavoro_id")
+        if lavoro_id is not None:
+            try:
+                lavoro_id = int(lavoro_id)
+            except (TypeError, ValueError):
+                return Response({"detail": "lavoro_id non valido."}, status=status.HTTP_400_BAD_REQUEST)
+        res = costruisci_grafo_task.delay(commerciale, request.user.id, scope, lavoro_id)
+        meta.task_id = res.id
+        meta.in_corso = True
+        meta.save(update_fields=["task_id", "in_corso", "aggiornato_at"])
+        return Response(
+            {"detail": "Costruzione del grafo avviata.", "task_id": res.id},
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+
+class AnnullaCostruzioneView(APIView):
+    """Interrompe la costruzione del grafo in corso."""
+
+    def post(self, request):
+        meta = GrafoMeta.singleton()
+        if meta.task_id:
+            current_app.control.revoke(meta.task_id, terminate=True, signal="SIGTERM")
+        meta.in_corso = False
+        meta.task_id = ""
+        meta.progresso = {
+            "fase": "interrotta",
+            "corrente": 0,
+            "totale": 1,
+            "percentuale": 0,
+            "messaggio": "Costruzione del grafo interrotta dall'utente",
+        }
+        meta.save(update_fields=["in_corso", "task_id", "progresso", "aggiornato_at"])
+        return Response({"detail": "Costruzione interrotta."})
 
 
 class NodoView(APIView):

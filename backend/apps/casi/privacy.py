@@ -6,6 +6,7 @@ import unicodedata
 from collections.abc import Iterable
 
 PLACEHOLDER_RE = re.compile(r"\[[A-Z_]+_\d+\]")
+_RE_GRUPPO = re.compile(r"\[([A-Z_]+)_\d+\]")
 
 _WORD_RE = re.compile(r"[\wÀ-ÖØ-öø-ÿ']+", re.UNICODE)
 
@@ -20,7 +21,13 @@ _STOP_TOKENS = {
     "civile",
     "cod",
     "codice",
+    "comparsa",
+    "conclusionale",
+    "condominio",
     "contro",
+    "convenuto",
+    "convenuta",
+    "citazione",
     "del",
     "dell",
     "della",
@@ -28,6 +35,7 @@ _STOP_TOKENS = {
     "dello",
     "euro",
     "fattura",
+    "fascicolo",
     "gennaio",
     "febbraio",
     "marzo",
@@ -42,6 +50,8 @@ _STOP_TOKENS = {
     "dicembre",
     "pec",
     "presso",
+    "registro",
+    "ricorso",
     "sentenza",
     "sig",
     "sigra",
@@ -49,8 +59,30 @@ _STOP_TOKENS = {
     "srl",
     "spa",
     "tribunale",
+    "ufficio",
     "via",
     "viale",
+}
+
+_TOKEN_RESIDUI_GRUPPI = {
+    "PERSON",
+    "PRIVATE_PERSON",
+    "ORG",
+    "ORGANIZATION",
+}
+
+_STOP_PHRASES = {
+    "corte appello",
+    "codice civile",
+    "codice procedura",
+    "comparsa costituzione",
+    "in diritto",
+    "in fatto",
+    "p q m",
+    "registro generale",
+    "repubblica italiana",
+    "tribunale ordinario",
+    "ufficio processo",
 }
 
 _SUFFIX_RE = re.compile(
@@ -67,6 +99,12 @@ def normalizza_entita(valore: str) -> str:
     valore = _SUFFIX_RE.sub(" ", valore.casefold())
     valore = re.sub(r"[^\w]+", " ", valore, flags=re.UNICODE)
     return re.sub(r"\s+", " ", valore).strip()
+
+
+def gruppo_placeholder(placeholder: str) -> str:
+    """Restituisce il gruppo di un placeholder, es. PRIVATE_PERSON o DATE."""
+    m = _RE_GRUPPO.fullmatch(placeholder or "")
+    return m.group(1) if m else ""
 
 
 def token_significativi(valore: str) -> list[str]:
@@ -86,11 +124,17 @@ def normalizza_spazi_placeholder(testo: str) -> str:
     if not testo:
         return testo
     testo = re.sub(r"(?<=[\wÀ-ÖØ-öø-ÿ])(\[[A-Z_]+_\d+\])", r" \1", testo)
+    testo = re.sub(r"(?<=[.;:!?])(?=\[[A-Z_]+_\d+\])", " ", testo)
     testo = re.sub(r"(\[[A-Z_]+_\d+\])(?=[\wÀ-ÖØ-öø-ÿ])", r"\1 ", testo)
+    testo = re.sub(r"(\[[A-Z_]+_\d+\])(?=\[[A-Z_]+_\d+\])", r"\1 ", testo)
     testo = re.sub(r"\s+([,.;:!?])", r"\1", testo)
     testo = re.sub(r"([(\[])\s+", r"\1", testo)
     testo = re.sub(r"\s+([)\]])", r"\1", testo)
     return re.sub(r"[ \t]{2,}", " ", testo)
+
+
+def _usa_token_residui(placeholder: str) -> bool:
+    return gruppo_placeholder(placeholder) in _TOKEN_RESIDUI_GRUPPI
 
 
 def _replace_ci(testo: str, needle: str, repl: str) -> str:
@@ -119,9 +163,76 @@ def maschera_residui(testo: str, mappa: dict[str, str]) -> str:
         if not placeholder or not PLACEHOLDER_RE.fullmatch(placeholder):
             continue
         testo = _replace_ci(testo, reale or "", placeholder)
-        for token in token_significativi(reale or ""):
-            testo = _replace_ci(testo, token, placeholder)
+        if _usa_token_residui(placeholder):
+            for token in token_significativi(reale or ""):
+                testo = _replace_ci(testo, token, placeholder)
     return normalizza_spazi_placeholder(testo)
+
+
+_ROLE_SINGLE_RE = re.compile(
+    r"\b(?:avv|ing|geom|dott|dott\.ssa|ctu|ctp|perito|teste|sig|sig\.ra)\.?\s+"
+    r"([A-ZÀ-Ö][a-zà-öø-ÿ']{3,})\b"
+)
+_ORG_CANDIDATE_RE = re.compile(
+    r"\b([A-ZÀ-Ö][\wÀ-ÖØ-öø-ÿ'&-]*(?:\s+[A-ZÀ-Ö][\wÀ-ÖØ-öø-ÿ'&-]*){0,5}\s+"
+    r"(?:S\.?\s*r\.?\s*l\.?|S\.?\s*p\.?\s*A\.?|S\.?\s*n\.?\s*c\.?|"
+    r"S\.?\s*a\.?\s*s\.?|Società|Cooperativa|Impresa|Ditta))\b",
+    re.IGNORECASE,
+)
+_CAPITALIZED_PAIR_RE = re.compile(
+    r"\b([A-ZÀ-Ö][a-zà-öø-ÿ']{2,}(?:\s+[A-ZÀ-Ö][a-zà-öø-ÿ']{2,}){1,3})\b"
+)
+
+
+def _gia_nota(candidato: str, valori_noti: list[str]) -> bool:
+    norm = normalizza_entita(candidato)
+    if not norm:
+        return True
+    if norm in _STOP_PHRASES:
+        return True
+    tokens = set(norm.split())
+    if tokens and all(t in _STOP_TOKENS for t in tokens):
+        return True
+    for valore in valori_noti:
+        n_valore = normalizza_entita(valore)
+        if not n_valore:
+            continue
+        if norm == n_valore or norm in n_valore or n_valore in norm:
+            return True
+        val_tokens = set(n_valore.split())
+        if tokens and tokens <= val_tokens:
+            return True
+    return False
+
+
+def candidati_pii_sconosciuti(testo: str, mappa: dict[str, str]) -> list[dict[str, str]]:
+    """Euristica prudente per residui PII non presenti nella mappa del filtro.
+
+    Il privacy filter può produrre mappe incomplete (es. nome spezzato) o lasciare
+    un'organizzazione non mascherata. Qui non proviamo a "indovinare" la persona:
+    segnaliamo candidati ad alta probabilità per revisione/blocco export.
+    """
+    corpo = PLACEHOLDER_RE.sub(" ", testo or "")
+    valori_noti = [v for v in (mappa or {}).values() if v]
+    candidati: list[dict[str, str]] = []
+    visti: set[str] = set()
+
+    def aggiungi(valore: str, tipo: str):
+        valore = re.sub(r"\s+", " ", (valore or "").strip(" ,.;:()[]"))
+        norm = normalizza_entita(valore)
+        if len(norm) < 4 or norm in visti or _gia_nota(valore, valori_noti):
+            return
+        candidati.append({"tipo": tipo, "token": valore})
+        visti.add(norm)
+
+    for m in _ORG_CANDIDATE_RE.finditer(corpo):
+        aggiungi(m.group(1), "organizzazione")
+    for m in _ROLE_SINGLE_RE.finditer(corpo):
+        aggiungi(m.group(1), "persona")
+    for m in _CAPITALIZED_PAIR_RE.finditer(corpo):
+        aggiungi(m.group(1), "persona_o_ente")
+
+    return candidati[:50]
 
 
 def privacy_report(
@@ -153,9 +264,11 @@ def privacy_report(
         for m in re.finditer(r"\[[^\]\s]{3,}\]", corpo)
         if not PLACEHOLDER_RE.fullmatch(m.group(0))
     ][:20]
+    unknown = candidati_pii_sconosciuti(corpo, dict(mappa or {}))
     return {
-        "ok": not leaks and not malformed,
+        "ok": not leaks and not malformed and not unknown,
         "leaks": leaks[:50],
+        "unknown_pii": unknown,
         "malformed_placeholders": malformed,
-        "warnings": len(leaks) + len(malformed),
+        "warnings": len(leaks) + len(malformed) + len(unknown),
     }

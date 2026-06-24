@@ -19,11 +19,21 @@ class Richiesta(models.Model):
         ANALIZZATA = "analizzata", "Analizzata"
         APPROFONDITA = "approfondita", "Approfondita (in diritto)"
 
+    class Tipo(models.TextChoices):
+        DOMANDA = "domanda", "Domanda"
+        DIFESA_ECCEZIONE = "difesa_eccezione", "Difesa/eccezione"
+        RICONVENZIONALE = "riconvenzionale", "Domanda riconvenzionale"
+        ISTRUTTORIA = "istruttoria", "Istanza istruttoria"
+        ALTRO = "altro", "Altro"
+
     lavoro = models.ForeignKey(
         Lavoro, on_delete=models.CASCADE, related_name="richieste"
     )
     parte_richiedente = models.CharField(max_length=16, choices=Parte.choices)
     testo = models.TextField()
+    tipo = models.CharField(max_length=32, choices=Tipo.choices, default=Tipo.DOMANDA)
+    confidence = models.FloatField(default=0.65)
+    flags = models.JSONField(default=list, blank=True)
     stato = models.CharField(
         max_length=16, choices=Stato.choices, default=Stato.DA_ANALIZZARE
     )
@@ -62,6 +72,10 @@ class SpuntoRicerca(models.Model):
         WEB = "web", "Ricerca web"
         MANUALE = "manuale", "Inserito manualmente"
 
+    class StatoFonte(models.TextChoices):
+        OK = "ok", "Fonte disponibile"
+        INSUFFICIENTE = "insufficiente", "Ricerca insufficiente"
+
     lavoro = models.ForeignKey(
         Lavoro, on_delete=models.CASCADE, related_name="spunti"
     )
@@ -70,6 +84,9 @@ class SpuntoRicerca(models.Model):
     sintesi = models.TextField()
     suggerimento = models.TextField(blank=True)
     fonte = models.CharField(max_length=1000, blank=True)
+    stato_fonte = models.CharField(
+        max_length=16, choices=StatoFonte.choices, default=StatoFonte.OK
+    )
     origine = models.CharField(max_length=16, choices=Origine.choices, default=Origine.WEB)
     created_at = models.DateTimeField(auto_now_add=True)
 

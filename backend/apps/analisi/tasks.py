@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+import re
+from django.utils import timezone
 
 from celery import shared_task
 from django.db.models import Q
@@ -48,9 +50,28 @@ def _set_progress(
             "totale": totale,
             "percentuale": round(corrente / totale * 100),
             "messaggio": messaggio,
+            "aggiornato_at": timezone.now().isoformat(),
         },
     )
     lavoro.save(update_fields=[campo])
+
+
+def _errore_operativo(exc: Exception) -> str:
+    testo = str(exc)
+    basso = testo.lower()
+    if (
+        "host.docker.internal" in basso
+        or "11434" in basso
+        or "network is unreachable" in basso
+        or "connection refused" in basso
+        or "connecterror" in basso
+    ):
+        return (
+            "Ollama non raggiungibile dal worker/container. Avvia sul Mac con "
+            "OLLAMA_HOST=0.0.0.0:11434 ollama serve oppure abilita il LaunchAgent "
+            "com.uppilot.ollama; poi verifica OLLAMA_BASE_URL=http://host.docker.internal:11434."
+        )
+    return testo
 
 
 def _sanifica_lavoro(lavoro: Lavoro, testo: str) -> str:
@@ -59,6 +80,41 @@ def _sanifica_lavoro(lavoro: Lavoro, testo: str) -> str:
 
 def _sanifica_lista(lavoro: Lavoro, valori) -> list[str]:
     return [_sanifica_lavoro(lavoro, str(x)) for x in (valori or []) if x]
+
+
+_NUMERO_SENSIBILE_RE = re.compile(
+    r"(?:€\s*)?\b\d{1,3}(?:[.\s]\d{3})+(?:,\d+)?\b|\b\d+/\d{2,4}\b|"
+    r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b",
+    re.IGNORECASE,
+)
+
+
+def _numeri_sensibili(testo: str) -> set[str]:
+    return {re.sub(r"\s+", "", m.group(0).replace("€", "")) for m in _NUMERO_SENSIBILE_RE.finditer(testo or "")}
+
+
+def _avvisi_coerenza_numerica(richiesta: Richiesta, *testi_generati: str) -> list[str]:
+    sorgente = _numeri_sensibili(richiesta.testo)
+    if not sorgente:
+        return []
+    generati: set[str] = set()
+    for testo in testi_generati:
+        generati |= _numeri_sensibili(testo)
+    estranei = sorted(generati - sorgente)
+    if not estranei:
+        return []
+    return [
+        "Numeri/importi generati non presenti nel testo della richiesta: "
+        + ", ".join(estranei[:5])
+        + ". Verifica coerenza con gli atti."
+    ]
+
+
+def _confidence(valore) -> float:
+    try:
+        return max(0.0, min(1.0, float(valore)))
+    except (TypeError, ValueError):
+        return 0.65
 
 
 @shared_task
@@ -72,6 +128,7 @@ def analizza_lavoro_task(lavoro_id: int, commerciale: bool = False) -> None:
         "totale": 4,
         "percentuale": 0,
         "messaggio": "Preparazione dei documenti pseudonimizzati",
+        "aggiornato_at": timezone.now().isoformat(),
     }
     lavoro.save(update_fields=["analisi_stato", "analisi_errore", "analisi_progresso"])
 
@@ -87,15 +144,17 @@ def analizza_lavoro_task(lavoro_id: int, commerciale: bool = False) -> None:
         dati = analizza_lavoro(lavoro, get_llm_backend(commerciale))
     except Exception as exc:  # noqa: BLE001
         logger.exception("Analisi fallita per il lavoro %s", lavoro_id)
+        messaggio = _errore_operativo(exc)
         lavoro.analisi_stato = Lavoro.StatoAnalisi.ERRORE
-        lavoro.analisi_errore = str(exc)
+        lavoro.analisi_errore = messaggio
         lavoro.analisi_task_id = ""
         lavoro.analisi_progresso = {
             "fase": "errore",
             "corrente": 0,
             "totale": 1,
             "percentuale": 0,
-            "messaggio": str(exc),
+            "messaggio": messaggio,
+            "aggiornato_at": timezone.now().isoformat(),
         }
         lavoro.save(
             update_fields=[
@@ -133,7 +192,10 @@ def analizza_lavoro_task(lavoro_id: int, commerciale: bool = False) -> None:
         Richiesta(
             lavoro=lavoro,
             parte_richiedente=r["parte"],
+            tipo=r.get("tipo", Richiesta.Tipo.DOMANDA),
             testo=r["testo"],
+            confidence=_confidence(r.get("confidence", 0.65)),
+            flags=r.get("flags", []),
             quesiti_aperti=r["quesiti_aperti"],
             stato=Richiesta.Stato.ANALIZZATA,
             ordine=i,
@@ -155,6 +217,7 @@ def analizza_lavoro_task(lavoro_id: int, commerciale: bool = False) -> None:
         "totale": 4,
         "percentuale": 100,
         "messaggio": "Analisi completata",
+        "aggiornato_at": timezone.now().isoformat(),
     }
     lavoro.save(update_fields=["analisi_stato", "analisi_task_id", "analisi_progresso"])
 
@@ -196,6 +259,7 @@ def approfondisci_lavoro_task(lavoro_id: int, commerciale: bool = False) -> None
         "totale": max(len(richieste), 1),
         "percentuale": 0,
         "messaggio": "Preparazione richieste e documenti",
+        "aggiornato_at": timezone.now().isoformat(),
     }
     lavoro.save(
         update_fields=[
@@ -227,12 +291,25 @@ def approfondisci_lavoro_task(lavoro_id: int, commerciale: bool = False) -> None
                 lavoro, dati["non_contestazioni"]
             )
             richiesta.quesiti_aperti = _sanifica_lista(lavoro, dati["quesiti_aperti"])
+            flags = list(richiesta.flags or [])
+            flags.extend(
+                _avvisi_coerenza_numerica(
+                    richiesta,
+                    richiesta.onere_probatorio,
+                    "\n".join(richiesta.non_contestazioni or []),
+                    "\n".join(richiesta.quesiti_aperti or []),
+                )
+            )
+            if len(dati["allegati"]) > 3:
+                flags.append("Allegati collegati oltre la soglia attesa: rivedi pertinenza.")
+            richiesta.flags = list(dict.fromkeys(flags))
             richiesta.stato = Richiesta.Stato.APPROFONDITA
             richiesta.save(
                 update_fields=[
                     "onere_probatorio",
                     "non_contestazioni",
                     "quesiti_aperti",
+                    "flags",
                     "stato",
                 ]
             )
@@ -247,15 +324,17 @@ def approfondisci_lavoro_task(lavoro_id: int, commerciale: bool = False) -> None
             )
     except Exception as exc:  # noqa: BLE001
         logger.exception("Approfondimento fallito per il lavoro %s", lavoro_id)
+        messaggio = _errore_operativo(exc)
         lavoro.approfondimento_stato = Lavoro.StatoAnalisi.ERRORE
-        lavoro.approfondimento_errore = str(exc)
+        lavoro.approfondimento_errore = messaggio
         lavoro.approfondimento_task_id = ""
         lavoro.approfondimento_progresso = {
             "fase": "errore",
             "corrente": 0,
             "totale": 1,
             "percentuale": 0,
-            "messaggio": str(exc),
+            "messaggio": messaggio,
+            "aggiornato_at": timezone.now().isoformat(),
         }
         lavoro.save(
             update_fields=[
@@ -275,6 +354,7 @@ def approfondisci_lavoro_task(lavoro_id: int, commerciale: bool = False) -> None
         "totale": max(len(richieste), 1),
         "percentuale": 100,
         "messaggio": "Approfondimento completato",
+        "aggiornato_at": timezone.now().isoformat(),
     }
     lavoro.save(
         update_fields=[
@@ -297,6 +377,7 @@ def ricerca_spunti_task(lavoro_id: int, commerciale: bool = False) -> None:
         "totale": 3,
         "percentuale": 0,
         "messaggio": "Preparazione delle query giuridiche",
+        "aggiornato_at": timezone.now().isoformat(),
     }
     lavoro.save(update_fields=["ricerca_stato", "ricerca_errore", "ricerca_progresso"])
 
@@ -327,8 +408,35 @@ def ricerca_spunti_task(lavoro_id: int, commerciale: bool = False) -> None:
             )
             query = pseudonimizza_query(ricerca["query"], anon)
             risultati = provider.search(query)
+            risultati_con_fonte = [r for r in risultati if getattr(r, "fonte", "")]
+            if not risultati_con_fonte:
+                SpuntoRicerca.objects.create(
+                    lavoro=lavoro,
+                    query_pseudonimizzata=query,
+                    argomento=ricerca["argomento"],
+                    sintesi=(
+                        "Ricerca insufficiente: il provider non ha restituito fonti "
+                        "verificabili per questa query."
+                    ),
+                    suggerimento=(
+                        "Riformula la query con istituto giuridico, norma o orientamento "
+                        "più specifico, oppure incolla manualmente risultati da una fonte affidabile."
+                    ),
+                    fonte="",
+                    stato_fonte=SpuntoRicerca.StatoFonte.INSUFFICIENTE,
+                    origine=SpuntoRicerca.Origine.WEB,
+                )
+                _set_progress(
+                    lavoro,
+                    "ricerca_progresso",
+                    "web",
+                    corrente=indice,
+                    totale=totale,
+                    messaggio=f"Ricerca {indice}/{len(ricerche)} insufficiente",
+                )
+                continue
             dati = sintetizza_spunto(
-                ricerca["argomento"], query, _formatta_risultati(risultati), llm
+                ricerca["argomento"], query, _formatta_risultati(risultati_con_fonte), llm
             )
             SpuntoRicerca.objects.create(
                 lavoro=lavoro,
@@ -336,7 +444,8 @@ def ricerca_spunti_task(lavoro_id: int, commerciale: bool = False) -> None:
                 argomento=ricerca["argomento"],
                 sintesi=_sanifica_lavoro(lavoro, dati["sintesi"]),
                 suggerimento=_sanifica_lavoro(lavoro, dati["suggerimento"]),
-                fonte=risultati[0].fonte if risultati else "",
+                fonte=risultati_con_fonte[0].fonte,
+                stato_fonte=SpuntoRicerca.StatoFonte.OK,
                 origine=SpuntoRicerca.Origine.WEB,
             )
             _set_progress(
@@ -349,15 +458,17 @@ def ricerca_spunti_task(lavoro_id: int, commerciale: bool = False) -> None:
             )
     except Exception as exc:  # noqa: BLE001
         logger.exception("Ricerca spunti fallita per il lavoro %s", lavoro_id)
+        messaggio = _errore_operativo(exc)
         lavoro.ricerca_stato = Lavoro.StatoAnalisi.ERRORE
-        lavoro.ricerca_errore = str(exc)
+        lavoro.ricerca_errore = messaggio
         lavoro.ricerca_task_id = ""
         lavoro.ricerca_progresso = {
             "fase": "errore",
             "corrente": 0,
             "totale": 1,
             "percentuale": 0,
-            "messaggio": str(exc),
+            "messaggio": messaggio,
+            "aggiornato_at": timezone.now().isoformat(),
         }
         lavoro.save(
             update_fields=[
@@ -377,6 +488,7 @@ def ricerca_spunti_task(lavoro_id: int, commerciale: bool = False) -> None:
         "totale": 1,
         "percentuale": 100,
         "messaggio": "Ricerca completata",
+        "aggiornato_at": timezone.now().isoformat(),
     }
     lavoro.save(update_fields=["ricerca_stato", "ricerca_task_id", "ricerca_progresso"])
 
@@ -395,6 +507,7 @@ def ricerca_manuale_task(
         "totale": 2,
         "percentuale": 0,
         "messaggio": "Sintesi dei risultati incollati",
+        "aggiornato_at": timezone.now().isoformat(),
     }
     lavoro.save(update_fields=["ricerca_stato", "ricerca_errore", "ricerca_progresso"])
 
@@ -419,15 +532,17 @@ def ricerca_manuale_task(
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("Ricerca manuale fallita per il lavoro %s", lavoro_id)
+        messaggio = _errore_operativo(exc)
         lavoro.ricerca_stato = Lavoro.StatoAnalisi.ERRORE
-        lavoro.ricerca_errore = str(exc)
+        lavoro.ricerca_errore = messaggio
         lavoro.ricerca_task_id = ""
         lavoro.ricerca_progresso = {
             "fase": "errore",
             "corrente": 0,
             "totale": 1,
             "percentuale": 0,
-            "messaggio": str(exc),
+            "messaggio": messaggio,
+            "aggiornato_at": timezone.now().isoformat(),
         }
         lavoro.save(
             update_fields=[
@@ -447,5 +562,6 @@ def ricerca_manuale_task(
         "totale": 2,
         "percentuale": 100,
         "messaggio": "Spunto manuale creato",
+        "aggiornato_at": timezone.now().isoformat(),
     }
     lavoro.save(update_fields=["ricerca_stato", "ricerca_task_id", "ricerca_progresso"])
