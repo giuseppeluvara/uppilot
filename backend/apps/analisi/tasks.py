@@ -35,12 +35,12 @@ def _set_progress(
     campo: str,
     fase: str,
     *,
-    corrente: int = 0,
-    totale: int = 1,
+    corrente: float = 0,
+    totale: float = 1,
     messaggio: str = "",
 ) -> None:
-    totale = max(int(totale or 1), 1)
-    corrente = max(min(int(corrente or 0), totale), 0)
+    totale = max(float(totale or 1), 1.0)
+    corrente = max(min(float(corrente or 0), totale), 0.0)
     setattr(
         lavoro,
         campo,
@@ -110,6 +110,56 @@ def _avvisi_coerenza_numerica(richiesta: Richiesta, *testi_generati: str) -> lis
     ]
 
 
+def _pqm_scheletro(richieste: list[Richiesta]) -> str:
+    if not richieste:
+        return ""
+    righe = ["P.Q.M.", "Il Giudice, ogni diversa domanda, eccezione e istanza disattesa o assorbita:"]
+    parti = {
+        Richiesta.Parte.ATTORE: "Attore",
+        Richiesta.Parte.CONVENUTO: "Convenuto",
+    }
+    for indice, richiesta in enumerate(richieste, start=1):
+        tipo = richiesta.get_tipo_display().lower()
+        parte = parti.get(richiesta.parte_richiedente, richiesta.get_parte_richiedente_display())
+        righe.append(
+            f"{indice}. sulla {tipo} di parte {parte}: "
+            f"[DA DECIDERE] {richiesta.testo}"
+        )
+    righe.append("Spese di lite: [DA DECIDERE].")
+    return "\n".join(righe)
+
+
+def _pqm_da_rigenerare(pqm: str) -> bool:
+    testo = (pqm or "").strip()
+    if not testo:
+        return True
+    return (
+        "Convenuto/ricorrente" in testo
+        and "[DA DECIDERE]" in testo
+        and "Spese di lite:" in testo
+        and "Il Giudice, ogni diversa domanda" in testo
+    )
+
+
+def _contenuto_per_richiesta(richieste: list[Richiesta]) -> dict[str, dict]:
+    contenuto: dict[str, dict] = {}
+    for richiesta in richieste:
+        contenuto[str(richiesta.id)] = {
+            "ordine": richiesta.ordine,
+            "parte": richiesta.parte_richiedente,
+            "tipo": richiesta.tipo,
+            "testo": richiesta.testo,
+            "onere_probatorio": richiesta.onere_probatorio,
+            "motivazione": richiesta.motivazione,
+            "non_contestazioni": richiesta.non_contestazioni or [],
+            "quesiti_aperti": richiesta.quesiti_aperti or [],
+            "allegati_collegati": list(
+                richiesta.allegati_collegati.values_list("id", flat=True)
+            ),
+        }
+    return contenuto
+
+
 def _confidence(valore) -> float:
     try:
         return max(0.0, min(1.0, float(valore)))
@@ -136,12 +186,23 @@ def analizza_lavoro_task(lavoro_id: int, commerciale: bool = False) -> None:
         _set_progress(
             lavoro,
             "analisi_progresso",
-            "llm",
+            "preparazione_llm",
             corrente=1,
             totale=4,
-            messaggio="Sintesi del fatto ed estrazione delle richieste",
+            messaggio="Preparazione del modello locale",
         )
-        dati = analizza_lavoro(lavoro, get_llm_backend(commerciale))
+        dati = analizza_lavoro(
+            lavoro,
+            get_llm_backend(commerciale),
+            progress_callback=lambda fase, corrente, totale, messaggio: _set_progress(
+                lavoro,
+                "analisi_progresso",
+                fase,
+                corrente=corrente,
+                totale=totale,
+                messaggio=messaggio,
+            ),
+        )
     except Exception as exc:  # noqa: BLE001
         logger.exception("Analisi fallita per il lavoro %s", lavoro_id)
         messaggio = _errore_operativo(exc)
@@ -278,7 +339,7 @@ def approfondisci_lavoro_task(lavoro_id: int, commerciale: bool = False) -> None
                 lavoro,
                 "approfondimento_progresso",
                 "richiesta",
-                corrente=indice - 1,
+                corrente=indice - 0.5,
                 totale=totale,
                 messaggio=f"Approfondimento domanda {indice}/{len(richieste)}",
             )
@@ -287,6 +348,7 @@ def approfondisci_lavoro_task(lavoro_id: int, commerciale: bool = False) -> None
             richiesta.onere_probatorio = _sanifica_lavoro(
                 lavoro, dati["onere_probatorio"]
             )
+            richiesta.motivazione = _sanifica_lavoro(lavoro, dati["motivazione"])
             richiesta.non_contestazioni = _sanifica_lista(
                 lavoro, dati["non_contestazioni"]
             )
@@ -296,6 +358,7 @@ def approfondisci_lavoro_task(lavoro_id: int, commerciale: bool = False) -> None
                 _avvisi_coerenza_numerica(
                     richiesta,
                     richiesta.onere_probatorio,
+                    richiesta.motivazione,
                     "\n".join(richiesta.non_contestazioni or []),
                     "\n".join(richiesta.quesiti_aperti or []),
                 )
@@ -307,6 +370,7 @@ def approfondisci_lavoro_task(lavoro_id: int, commerciale: bool = False) -> None
             richiesta.save(
                 update_fields=[
                     "onere_probatorio",
+                    "motivazione",
                     "non_contestazioni",
                     "quesiti_aperti",
                     "flags",
@@ -322,6 +386,17 @@ def approfondisci_lavoro_task(lavoro_id: int, commerciale: bool = False) -> None
                 totale=totale,
                 messaggio=f"Domanda {indice}/{len(richieste)} completata",
             )
+        bozza, _ = Bozza.objects.get_or_create(lavoro=lavoro)
+        richieste_aggiornate = list(
+            lavoro.richieste.prefetch_related("allegati_collegati").all()
+        )
+        update_fields = ["contenuto_per_richiesta", "versione", "updated_at"]
+        bozza.contenuto_per_richiesta = _contenuto_per_richiesta(richieste_aggiornate)
+        if _pqm_da_rigenerare(bozza.pqm):
+            bozza.pqm = _sanifica_lavoro(lavoro, _pqm_scheletro(richieste_aggiornate))
+            update_fields.append("pqm")
+        bozza.versione += 1
+        bozza.save(update_fields=update_fields)
     except Exception as exc:  # noqa: BLE001
         logger.exception("Approfondimento fallito per il lavoro %s", lavoro_id)
         messaggio = _errore_operativo(exc)

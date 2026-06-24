@@ -3,12 +3,38 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from difflib import SequenceMatcher
 from collections.abc import Iterable
 
 PLACEHOLDER_RE = re.compile(r"\[[A-Z_]+_\d+\]")
+BRACKET_TOKEN_RE = re.compile(r"\[[^\]\n]{3,}\]")
 _RE_GRUPPO = re.compile(r"\[([A-Z_]+)_\d+\]")
 
 _WORD_RE = re.compile(r"[\wÀ-ÖØ-öø-ÿ']+", re.UNICODE)
+
+_MARKER_AMMESSI = {"[DA DECIDERE]"}
+
+_GRUPPI_PLACEHOLDER_NOTI = {
+    "ADDRESS",
+    "DATE",
+    "EMAIL",
+    "GPE",
+    "IBAN",
+    "LOCATION",
+    "LOC",
+    "MONEY",
+    "ORG",
+    "ORGANIZATION",
+    "ORGANIZZAZIONE",
+    "PERSON",
+    "PHONE",
+    "PHONE_NUMBER",
+    "PRIVATE_ADDRESS",
+    "PRIVATE_DATE",
+    "PRIVATE_PERSON",
+    "TAX_CODE",
+    "VAT",
+}
 
 _STOP_TOKENS = {
     "alla",
@@ -69,6 +95,7 @@ _TOKEN_RESIDUI_GRUPPI = {
     "PRIVATE_PERSON",
     "ORG",
     "ORGANIZATION",
+    "ORGANIZZAZIONE",
 }
 
 _STOP_PHRASES = {
@@ -127,10 +154,56 @@ def normalizza_spazi_placeholder(testo: str) -> str:
     testo = re.sub(r"(?<=[.;:!?])(?=\[[A-Z_]+_\d+\])", " ", testo)
     testo = re.sub(r"(\[[A-Z_]+_\d+\])(?=[\wÀ-ÖØ-öø-ÿ])", r"\1 ", testo)
     testo = re.sub(r"(\[[A-Z_]+_\d+\])(?=\[[A-Z_]+_\d+\])", r"\1 ", testo)
+    testo = re.sub(r"(\[[A-Z_]+_\d+\])(?:\s+\1)+", r"\1", testo)
     testo = re.sub(r"\s+([,.;:!?])", r"\1", testo)
     testo = re.sub(r"([(\[])\s+", r"\1", testo)
     testo = re.sub(r"\s+([)\]])", r"\1", testo)
     return re.sub(r"[ \t]{2,}", " ", testo)
+
+
+def _placeholder_valido(token: str, mappa: dict[str, str] | None = None) -> bool:
+    if token in _MARKER_AMMESSI:
+        return True
+    if not PLACEHOLDER_RE.fullmatch(token or ""):
+        return False
+    if mappa and token in mappa:
+        return True
+    gruppo = gruppo_placeholder(token)
+    return gruppo in _GRUPPI_PLACEHOLDER_NOTI
+
+
+def ripara_placeholder_malformed(testo: str, mappa: dict[str, str]) -> str:
+    """Corregge placeholder generati con piccole deformazioni dal LLM.
+
+    Esempio reale: ``[ORGANIZZAZIONIONE_1]`` al posto di
+    ``[ORGANIZZAZIONE_1]``. Se esiste nella mappa un placeholder con stesso
+    indice e gruppo molto simile, lo sostituiamo prima del leak check/export.
+    """
+    if not testo or not mappa:
+        return testo or ""
+    validi = [ph for ph in mappa if PLACEHOLDER_RE.fullmatch(ph)]
+    if not validi:
+        return testo
+
+    def repl(match: re.Match[str]) -> str:
+        token = match.group(0)
+        if _placeholder_valido(token, mappa):
+            return token
+        m = re.fullmatch(r"\[([A-Z_]+)_(\d+)\]", token)
+        if not m:
+            return token
+        gruppo, indice = m.groups()
+        candidati = [ph for ph in validi if ph.endswith(f"_{indice}]")]
+        if not candidati:
+            return token
+        migliore = max(
+            candidati,
+            key=lambda ph: SequenceMatcher(None, gruppo, gruppo_placeholder(ph)).ratio(),
+        )
+        ratio = SequenceMatcher(None, gruppo, gruppo_placeholder(migliore)).ratio()
+        return migliore if ratio >= 0.78 else token
+
+    return BRACKET_TOKEN_RE.sub(repl, testo)
 
 
 def _usa_token_residui(placeholder: str) -> bool:
@@ -157,6 +230,7 @@ def maschera_residui(testo: str, mappa: dict[str, str]) -> str:
     if not testo or not mappa:
         return normalizza_spazi_placeholder(testo or "")
 
+    testo = ripara_placeholder_malformed(testo, mappa)
     for placeholder, reale in sorted(
         mappa.items(), key=lambda kv: len(kv[1] or ""), reverse=True
     ):
@@ -261,8 +335,8 @@ def privacy_report(
 
     malformed = [
         m.group(0)
-        for m in re.finditer(r"\[[^\]\s]{3,}\]", corpo)
-        if not PLACEHOLDER_RE.fullmatch(m.group(0))
+        for m in BRACKET_TOKEN_RE.finditer(corpo)
+        if not _placeholder_valido(m.group(0), dict(mappa or {}))
     ][:20]
     unknown = candidati_pii_sconosciuti(corpo, dict(mappa or {}))
     return {

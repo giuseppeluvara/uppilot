@@ -5,6 +5,7 @@ from rest_framework.test import APIClient
 from ai.interfaces import AnonymizationResult
 from apps.casi.models import Documento, Lavoro, SezioneDocumenti
 from apps.casi import tasks
+from apps.casi.privacy import maschera_residui, privacy_report
 
 
 @pytest.fixture
@@ -134,3 +135,81 @@ def test_canonicalizzazione_cross_documento_e_residui(db, django_user_model, mon
     assert "Paolo" not in doc1.testo_pseudonimizzato
     assert "Neri" not in doc1.testo_pseudonimizzato
     assert len([ph for ph, reale in lavoro.mappa_entita.items() if "Alfa" in reale]) == 1
+
+
+def test_pseudonimizzazione_maschera_pii_sconosciuti_e_org_italiano(db, django_user_model, monkeypatch):
+    utente = django_user_model.objects.create_user(username="privacy", password="x")
+    lavoro = Lavoro.objects.create(utente=utente, titolo="Caso")
+    sezione = SezioneDocumenti.objects.create(lavoro=lavoro, tipo=SezioneDocumenti.Tipo.CONVENUTO)
+    doc = Documento.objects.create(
+        sezione=sezione,
+        file="c.pdf",
+        testo_estratto="Comparsa",
+        stato_estrazione=Documento.StatoEstrazione.COMPLETATO,
+    )
+
+    monkeypatch.setattr(
+        tasks,
+        "get_anonymization_service",
+        lambda: type(
+            "S",
+            (),
+            {
+                "anonymize": lambda self, t: AnonymizationResult(
+                    "Il Condominio Beta, rappresentato dall'avv. Paolo Rizzi, contesta [ORGANIZZAZIONE_1].",
+                    {"[ORGANIZZAZIONE_1]": "Aurora Impianti S.r.l."},
+                )
+            },
+        )(),
+    )
+
+    tasks.pseudonimizza_documento(doc.id)
+
+    doc.refresh_from_db()
+    assert "Condominio Beta" not in doc.testo_pseudonimizzato
+    assert "Paolo Rizzi" not in doc.testo_pseudonimizzato
+    assert any(v == "Condominio Beta" for v in doc.mappa_entita.values())
+    assert any(v == "Paolo Rizzi" for v in doc.mappa_entita.values())
+
+
+def test_pseudonimizzazione_ripara_date_e_indirizzi_spezzati(db, django_user_model, monkeypatch):
+    utente = django_user_model.objects.create_user(username="frammenti", password="x")
+    lavoro = Lavoro.objects.create(utente=utente, titolo="Caso")
+    sezione = SezioneDocumenti.objects.create(lavoro=lavoro, tipo=SezioneDocumenti.Tipo.GENERICI)
+    doc = Documento.objects.create(
+        sezione=sezione,
+        file="d.pdf",
+        testo_estratto="Contratto",
+        stato_estrazione=Documento.StatoEstrazione.COMPLETATO,
+    )
+
+    monkeypatch.setattr(
+        tasks,
+        "get_anonymization_service",
+        lambda: type(
+            "S",
+            (),
+            {
+                "anonymize": lambda self, t: AnonymizationResult(
+                    "sito in Genova, via Lan [PRIVATE_ADDRESS_1] 7, in data [PRIVATE_DATE_1] 5.",
+                    {"[PRIVATE_ADDRESS_1]": "terna", "[PRIVATE_DATE_1]": "20 maggio 202"},
+                )
+            },
+        )(),
+    )
+
+    tasks.pseudonimizza_documento(doc.id)
+
+    doc.refresh_from_db()
+    assert "Lan [PRIVATE_ADDRESS_1]" not in doc.testo_pseudonimizzato
+    assert doc.mappa_entita["[PRIVATE_ADDRESS_1]"] == "Lanterna"
+    assert "[PRIVATE_DATE_1] 5" not in doc.testo_pseudonimizzato
+    assert doc.mappa_entita["[PRIVATE_DATE_1]"] == "20 maggio 2025"
+
+
+def test_placeholder_malformed_riparato_e_marker_da_decidere_ammesso():
+    mappa = {"[ORGANIZZAZIONE_1]": "Aurora Impianti S.r.l."}
+    testo = maschera_residui("[ORGANIZZAZIONIONE_1] chiede [DA DECIDERE].", mappa)
+    assert "[ORGANIZZAZIONE_1]" in testo
+    report = privacy_report(testo, mappa)
+    assert report["malformed_placeholders"] == []

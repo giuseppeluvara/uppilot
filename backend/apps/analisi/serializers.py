@@ -123,11 +123,15 @@ class SpuntoRicercaSerializer(serializers.ModelSerializer):
     def get_fonte_affidabilita(self, obj):
         if obj.stato_fonte == SpuntoRicerca.StatoFonte.INSUFFICIENTE:
             return "insufficiente"
+        if obj.origine == SpuntoRicerca.Origine.MANUALE and not obj.fonte:
+            return "media"
         return _qualifica_fonte(obj.fonte)[0]
 
     def get_fonte_label(self, obj):
         if obj.stato_fonte == SpuntoRicerca.StatoFonte.INSUFFICIENTE:
             return "Ricerca insufficiente"
+        if obj.origine == SpuntoRicerca.Origine.MANUALE and not obj.fonte:
+            return "Materiale manuale da verificare"
         return _qualifica_fonte(obj.fonte)[1]
 
     class Meta:

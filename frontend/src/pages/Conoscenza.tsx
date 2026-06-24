@@ -42,7 +42,8 @@ export function Conoscenza() {
   );
   const [query, setQuery] = useState("");
   const [costruendo, setCostruendo] = useState(false);
-  const [scope, setScope] = useState<"tutto" | "corpus" | "fascicoli">("tutto");
+  const [scope, setScope] = useState<"tutto" | "corpus" | "fascicoli" | "lavoro">("tutto");
+  const [lavoroId, setLavoroId] = useState("");
 
   const container = useRef<HTMLDivElement>(null);
   const sigma = useRef<Sigma | null>(null);
@@ -165,9 +166,14 @@ export function Conoscenza() {
   }
 
   async function aggiorna() {
+    const lavoro = Number(lavoroId);
+    if (scope === "lavoro" && (!Number.isInteger(lavoro) || lavoro <= 0)) {
+      toast.error("Inserisci un ID fascicolo valido.");
+      return;
+    }
     setCostruendo(true);
     try {
-      await api.post("/grafo/costruisci/", { scope });
+      await api.post("/grafo/costruisci/", scope === "lavoro" ? { scope, lavoro_id: lavoro } : { scope });
       toast.info("Costruzione del grafo avviata…");
       for (let i = 0; i < 120; i++) {
         await new Promise((r) => setTimeout(r, 3000));
@@ -251,7 +257,7 @@ export function Conoscenza() {
             </form>
             <select
               value={scope}
-              onChange={(e) => setScope(e.target.value as "tutto" | "corpus" | "fascicoli")}
+              onChange={(e) => setScope(e.target.value as "tutto" | "corpus" | "fascicoli" | "lavoro")}
               className="h-9 rounded-md border bg-background px-2 text-sm"
               aria-label="Ambito costruzione grafo"
               disabled={costruzioneAttiva}
@@ -259,7 +265,18 @@ export function Conoscenza() {
               <option value="tutto">Tutto</option>
               <option value="corpus">Solo corpus</option>
               <option value="fascicoli">Solo fascicoli</option>
+              <option value="lavoro">Singolo fascicolo</option>
             </select>
+            {scope === "lavoro" && (
+              <Input
+                value={lavoroId}
+                onChange={(e) => setLavoroId(e.target.value)}
+                inputMode="numeric"
+                placeholder="ID fascicolo"
+                className="h-9 w-28"
+                disabled={costruzioneAttiva}
+              />
+            )}
             {costruzioneAttiva && (
               <Button variant="outline" onClick={annulla}>
                 <Ban />

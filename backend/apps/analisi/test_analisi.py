@@ -6,7 +6,7 @@ from rest_framework.test import APIClient
 
 from apps.analisi import tasks
 from apps.analisi.models import Bozza, Richiesta
-from apps.analisi.services import analizza_lavoro
+from apps.analisi.services import analizza_lavoro, classifica_tipo_richiesta
 from apps.casi.models import Documento, Lavoro, SezioneDocumenti
 from apps.casi.states import StatoLavoro
 
@@ -102,6 +102,94 @@ def test_analisi_resiliente_a_json_malformato(lavoro):
     assert dati["richieste"] == []  # richieste malformate → lista vuota, niente crash
 
 
+def test_analisi_integra_conclusioni_testuali_e_classifica_penale(lavoro):
+    _doc_accettato(
+        lavoro,
+        SezioneDocumenti.Tipo.ATTORE,
+        "Conclusioni dell'attrice:\n"
+        "1. accertare l'avvenuto adempimento di [ORGANIZZAZIONE_1];\n"
+        "2. condannare il [ORGANIZZAZIONE_2] al pagamento di euro 28.600.",
+    )
+    _doc_accettato(
+        lavoro,
+        SezioneDocumenti.Tipo.CONVENUTO,
+        "Conclusioni del convenuto:\n"
+        "1. rigettare la domanda di pagamento;\n"
+        "2. in via riconvenzionale, condannare [ORGANIZZAZIONE_1] a euro 18.900;\n"
+        "3. applicare la penale contrattuale di euro 3.000;\n"
+        "4. ammettere prova testimoniale.",
+    )
+    llm = FakeLLM(
+        {
+            "in_fatto": "Fatto.",
+            "richieste": [
+                {
+                    "parte": "attore",
+                    "tipo": "domanda",
+                    "testo": "condannare il [ORGANIZZAZIONE_2] al pagamento di euro 28.600",
+                    "confidence": 0.8,
+                    "quesiti_aperti": [],
+                }
+            ],
+        }
+    )
+
+    dati = analizza_lavoro(lavoro, llm)
+
+    testi = [r["testo"] for r in dati["richieste"]]
+    assert any("accertare l'avvenuto adempimento" in t for t in testi)
+    penale = next(r for r in dati["richieste"] if "penale contrattuale" in r["testo"])
+    assert penale["tipo"] == "domanda"
+    riconvenzionale = next(r for r in dati["richieste"] if "riconvenzionale" in r["testo"])
+    assert riconvenzionale["parte"] == "convenuto"
+    assert riconvenzionale["tipo"] == "riconvenzionale"
+
+
+def test_classificazione_difesa_e_riconvenzionale_convenuto():
+    assert (
+        classifica_tipo_richiesta(
+            "contesta integralmente la fattura e invoca l'eccezione di inadempimento",
+            "convenuto",
+        )
+        == "difesa_eccezione"
+    )
+    assert (
+        classifica_tipo_richiesta(
+            "condannare [ORGANIZZAZIONE_1] al pagamento di euro 18.900 per costi di ripristino",
+            "convenuto",
+        )
+        == "riconvenzionale"
+    )
+
+
+def test_pqm_scheletro_usa_label_convenuto_pulita(lavoro):
+    richiesta = Richiesta.objects.create(
+        lavoro=lavoro,
+        parte_richiedente=Richiesta.Parte.CONVENUTO,
+        tipo=Richiesta.Tipo.RICONVENZIONALE,
+        testo="condannare l'attore al pagamento di euro 18.900",
+        ordine=0,
+    )
+
+    testo = tasks._pqm_scheletro([richiesta])
+
+    assert "Convenuto/ricorrente" not in testo
+    assert "di parte Convenuto" in testo
+
+
+def test_pqm_legacy_autogenerato_puo_essere_rigenerato():
+    legacy = (
+        "P.Q.M.\n"
+        "Il Giudice, ogni diversa domanda, eccezione e istanza disattesa o assorbita:\n"
+        "1. sulla domanda di parte Convenuto/ricorrente: [DA DECIDERE] X\n"
+        "Spese di lite: [DA DECIDERE]."
+    )
+    manuale = "P.Q.M.\nCondanna il convenuto al pagamento."
+
+    assert tasks._pqm_da_rigenerare(legacy)
+    assert not tasks._pqm_da_rigenerare(manuale)
+
+
 def test_task_persiste_bozza_richieste_e_transiziona(lavoro, monkeypatch):
     _doc_accettato(
         lavoro, SezioneDocumenti.Tipo.ATTORE, "[PRIVATE_PERSON_1] chiede la risoluzione."
@@ -128,6 +216,19 @@ def test_task_persiste_bozza_richieste_e_transiziona(lavoro, monkeypatch):
     richiesta = Richiesta.objects.get(lavoro=lavoro)
     assert richiesta.parte_richiedente == "attore"
     assert richiesta.quesiti_aperti  # punto discrezionale posto come quesito (§1)
+
+
+def test_analisi_progress_callback_due_fasi(lavoro):
+    _doc_accettato(lavoro, SezioneDocumenti.Tipo.ATTORE, "[PRIVATE_PERSON_1] agisce.")
+    eventi = []
+
+    analizza_lavoro(
+        lavoro,
+        FakeLLM({"in_fatto": "Fatto.", "richieste": []}),
+        progress_callback=lambda *args: eventi.append(args),
+    )
+
+    assert [e[0] for e in eventi] == ["in_fatto", "richieste"]
 
 
 def test_endpoint_analizza_senza_documenti_400(lavoro):

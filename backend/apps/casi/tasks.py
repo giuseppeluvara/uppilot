@@ -11,10 +11,12 @@ from ai.factory import get_anonymization_service, get_ocr_backend
 
 from .models import Documento, Lavoro
 from .privacy import (
+    candidati_pii_sconosciuti,
     gruppo_placeholder,
     maschera_residui,
     normalizza_entita,
     normalizza_spazi_placeholder,
+    PLACEHOLDER_RE,
 )
 from .services.extraction import estrai_testo
 
@@ -22,6 +24,23 @@ logger = logging.getLogger(__name__)
 
 _RE_GRUPPO = re.compile(r"\[(.+)_\d+\]")
 _FUZZY_GROUPS = {"ORG", "ORGANIZATION", "PERSON", "PRIVATE_PERSON"}
+_ORG_CUES = {
+    "associazione",
+    "azienda",
+    "condominio",
+    "cooperativa",
+    "ditta",
+    "ente",
+    "fondazione",
+    "impresa",
+    "istituto",
+    "societa",
+    "srl",
+    "spa",
+    "snc",
+    "sas",
+}
+_ADDRESS_PREFIX_STOP = {"via", "viale", "piazza", "corso", "largo"}
 
 
 def _gruppo(placeholder: str) -> str:
@@ -37,6 +56,121 @@ def _pulisci_valore_entita(valore: str) -> str:
         valore = righe[-1]
     valore = re.sub(r"\s+", " ", valore or "").strip()
     return valore
+
+
+def _contatori_da_registro(registro: dict[str, str]) -> dict[str, int]:
+    contatori: dict[str, int] = {}
+    for ph in registro:
+        g = _gruppo(ph)
+        try:
+            n = int(ph.rsplit("_", 1)[1].rstrip("]"))
+        except ValueError:
+            n = 0
+        contatori[g] = max(contatori.get(g, 0), n)
+    return contatori
+
+
+def _nuovo_placeholder(registro: dict[str, str], gruppo: str) -> str:
+    contatori = _contatori_da_registro(registro)
+    contatori[gruppo] = contatori.get(gruppo, 0) + 1
+    ph = f"[{gruppo}_{contatori[gruppo]}]"
+    while ph in registro:
+        contatori[gruppo] += 1
+        ph = f"[{gruppo}_{contatori[gruppo]}]"
+    return ph
+
+
+def _gia_in_registro(valore: str, registro: dict[str, str]) -> bool:
+    norm = normalizza_entita(valore)
+    if not norm:
+        return True
+    for reale in registro.values():
+        n_reale = normalizza_entita(reale)
+        if norm == n_reale or norm in n_reale or n_reale in norm:
+            return True
+    return False
+
+
+def _placeholder_in_registro(valore: str, registro: dict[str, str]) -> str | None:
+    norm = normalizza_entita(valore)
+    if not norm:
+        return None
+    for ph, reale in registro.items():
+        n_reale = normalizza_entita(reale)
+        if norm == n_reale or norm in n_reale or n_reale in norm:
+            return ph
+    return None
+
+
+def _gruppo_candidato(candidato: dict[str, str]) -> str:
+    tipo = candidato.get("tipo", "")
+    token = candidato.get("token", "")
+    parole = set(normalizza_entita(token).split())
+    if tipo == "persona":
+        return "PRIVATE_PERSON"
+    if tipo == "organizzazione" or parole & _ORG_CUES:
+        return "ORGANIZZAZIONE"
+    return "PRIVATE_PERSON"
+
+
+def _ripara_frammenti_troncati(
+    testo: str, registro: dict[str, str], doc_map: dict[str, str]
+) -> str:
+    """Ricompone alcuni tagli tipici del privacy filter su date e indirizzi."""
+    for ph, reale in list(registro.items()):
+        gruppo = gruppo_placeholder(ph) or _gruppo(ph)
+        if "DATE" in gruppo and re.search(r"\b(?:19|20)\d$", reale or ""):
+            pattern = re.compile(rf"{re.escape(ph)}\s*(\d)\b")
+
+            def repl_date(match: re.Match[str]) -> str:
+                registro[ph] = f"{registro[ph]}{match.group(1)}"
+                doc_map[ph] = registro[ph]
+                return ph
+
+            testo = pattern.sub(repl_date, testo, count=1)
+        elif "DATE" in gruppo and re.search(r"\b(?:19|20)\d{2}$", reale or ""):
+            ultima_cifra = re.escape((reale or "")[-1])
+            testo = re.sub(rf"{re.escape(ph)}\s*{ultima_cifra}\b", ph, testo, count=1)
+
+        if "ADDRESS" in gruppo and reale and len(reale) <= 32:
+            pattern = re.compile(
+                rf"\b([A-ZÀ-Ö][a-zà-öø-ÿ]{{2,12}})\s*{re.escape(ph)}"
+            )
+
+            def repl_address(match: re.Match[str]) -> str:
+                prefisso = match.group(1)
+                if normalizza_entita(prefisso) in _ADDRESS_PREFIX_STOP:
+                    return match.group(0)
+                if registro[ph][:1].islower():
+                    registro[ph] = f"{prefisso}{registro[ph]}".strip()
+                doc_map[ph] = registro[ph]
+                return ph
+
+            testo = pattern.sub(repl_address, testo, count=1)
+    return testo
+
+
+def _maschera_candidati_sconosciuti(
+    testo: str, registro: dict[str, str], doc_map: dict[str, str]
+) -> str:
+    candidati = sorted(
+        candidati_pii_sconosciuti(testo, registro),
+        key=lambda c: len(c.get("token", "")),
+        reverse=True,
+    )
+    for candidato in candidati:
+        token = _pulisci_valore_entita(candidato.get("token", ""))
+        if len(normalizza_entita(token)) < 4:
+            continue
+        ph_esistente = _placeholder_in_registro(token, registro)
+        if ph_esistente:
+            doc_map[ph_esistente] = registro[ph_esistente]
+            continue
+        gruppo = _gruppo_candidato(candidato)
+        ph = _nuovo_placeholder(registro, gruppo)
+        registro[ph] = token
+        doc_map[ph] = token
+    return maschera_residui(testo, registro)
 
 
 def _token_match(norm: str, norm_esistente: str, gruppo: str) -> bool:
@@ -72,14 +206,7 @@ def _canonicalizza(lavoro: Lavoro, testo: str, mappa: dict) -> tuple[str, dict]:
         norm = normalizza_entita(v)
         if norm:
             inverso_norm.setdefault(gruppo_placeholder(k) or _gruppo(k), {})[norm] = k
-    contatori: dict[str, int] = {}
-    for ph in registro:
-        g = _gruppo(ph)
-        try:
-            n = int(ph.rsplit("_", 1)[1].rstrip("]"))
-        except ValueError:
-            n = 0
-        contatori[g] = max(contatori.get(g, 0), n)
+    contatori = _contatori_da_registro(registro)
 
     # Fase 1: ogni placeholder del documento -> token univoco (niente collisioni).
     doc_map: dict[str, str] = {}
@@ -98,6 +225,14 @@ def _canonicalizza(lavoro: Lavoro, testo: str, mappa: dict) -> tuple[str, dict]:
         for norm_esistente, canonico in norm_per_gruppo.items():
             if not norm_esistente:
                 continue
+            if gruppo in {"PRIVATE_ADDRESS", "ADDRESS"} and (
+                norm_esistente.endswith(norm) or norm.endswith(norm_esistente)
+            ):
+                return canonico
+            if gruppo in {"PRIVATE_DATE", "DATE"} and (
+                norm_esistente.startswith(norm) or norm.startswith(norm_esistente)
+            ):
+                return canonico
             if _token_match(norm, norm_esistente, gruppo):
                 return canonico
         return None
@@ -118,7 +253,12 @@ def _canonicalizza(lavoro: Lavoro, testo: str, mappa: dict) -> tuple[str, dict]:
         testo = testo.replace(token_di[ph], canon)
         doc_map[canon] = registro.get(canon, reale_n)
 
+    testo = _ripara_frammenti_troncati(testo, registro, doc_map)
+    testo = _maschera_candidati_sconosciuti(testo, registro, doc_map)
     testo = normalizza_spazi_placeholder(maschera_residui(testo, registro))
+    for ph in PLACEHOLDER_RE.findall(testo):
+        if ph in registro:
+            doc_map.setdefault(ph, registro[ph])
     lavoro.mappa_entita = registro
     lavoro.save(update_fields=["mappa_entita"])
     return testo, doc_map

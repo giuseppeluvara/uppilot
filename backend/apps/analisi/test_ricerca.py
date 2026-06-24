@@ -132,7 +132,9 @@ def test_endpoint_ricerca_e_manuale(lavoro, monkeypatch):
         f"/api/lavori/{lavoro.id}/ricerca/manuale/", {"materiale": "risultati"}, format="json"
     )
     assert ok.status_code == 202
-    assert client.get(f"/api/lavori/{lavoro.id}/spunti/").status_code == 200
+    spunti = client.get(f"/api/lavori/{lavoro.id}/spunti/")
+    assert spunti.status_code == 200
+    assert any(s["fonte_label"] == "Materiale manuale da verificare" for s in spunti.data)
 
 
 def test_ricerca_lavoro_altrui_404(lavoro, django_user_model):
