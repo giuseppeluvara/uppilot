@@ -116,6 +116,7 @@ def test_task_manuale_crea_spunto(lavoro, monkeypatch):
     spunto = SpuntoRicerca.objects.get(lavoro=lavoro, origine=SpuntoRicerca.Origine.MANUALE)
     assert spunto.argomento == "Onere prova"
     assert spunto.suggerimento
+    assert spunto.sintesi.startswith("Dai risultati incollati emerge")
 
 
 def test_endpoint_ricerca_e_manuale(lavoro, monkeypatch):

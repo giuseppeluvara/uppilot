@@ -27,8 +27,8 @@ Restituisci ESCLUSIVAMENTE un oggetto JSON:
 """
 
 PROMPT_SPUNTO = """Sei un assistente di approfondimento giuridico per un Ufficio per il Processo.
-A partire dai risultati di ricerca seguenti, produci uno SPUNTO di approfondimento, NON una \
-citazione data per buona. Sii esplicito che sono suggerimenti da verificare.
+A partire dal materiale seguente ({origine_label}), produci uno SPUNTO di approfondimento, \
+NON una citazione data per buona. Sii esplicito che sono suggerimenti da verificare.
 
 ARGOMENTO: {argomento}
 QUERY (pseudonimizzata): {query}
@@ -38,7 +38,7 @@ RISULTATI:
 
 Restituisci ESCLUSIVAMENTE un oggetto JSON:
 {{
-  "sintesi": "cosa emerge dalla ricerca, con cautela (es. 'La ricerca web suggerisce…')",
+  "sintesi": "cosa emerge dal materiale, con cautela ({incipit})",
   "suggerimento": "cosa potrebbe integrare l'operatore, a sua discrezione"
 }}
 """
@@ -79,10 +79,44 @@ def _formatta_risultati(risultati: list[SuggerimentoRicerca]) -> str:
     return "\n".join(f"- {r.titolo}: {r.sintesi} [{r.fonte or ''}]" for r in risultati)
 
 
-def sintetizza_spunto(argomento: str, query: str, materiale: str, llm: LLMBackend) -> dict:
-    prompt = PROMPT_SPUNTO.format(argomento=argomento, query=query, risultati=materiale)
+def _normalizza_spunto_manuale(testo: str) -> str:
+    sostituzioni = {
+        "La ricerca web suggerisce": "Dai risultati incollati emerge",
+        "La ricerca suggerisce": "Dai risultati incollati emerge",
+        "Dalla ricerca web emerge": "Dai risultati incollati emerge",
+        "Dalla ricerca emerge": "Dai risultati incollati emerge",
+    }
+    for vecchio, nuovo in sostituzioni.items():
+        if testo.startswith(vecchio):
+            return nuovo + testo[len(vecchio) :]
+    return testo
+
+
+def sintetizza_spunto(
+    argomento: str,
+    query: str,
+    materiale: str,
+    llm: LLMBackend,
+    *,
+    origine: str = "web",
+) -> dict:
+    manuale = origine == "manuale"
+    prompt = PROMPT_SPUNTO.format(
+        argomento=argomento,
+        query=query if query else "(non applicabile: materiale incollato manualmente)",
+        risultati=materiale,
+        origine_label="risultati incollati manualmente"
+        if manuale
+        else "risultati di ricerca web",
+        incipit="'Dai risultati incollati emerge…'"
+        if manuale
+        else "'La ricerca web suggerisce…'",
+    )
     dati = _estrai_json(llm.generate(prompt, format="json", think=False, temperature=0.3))
+    sintesi = str(dati.get("sintesi", "")).strip()
+    if manuale:
+        sintesi = _normalizza_spunto_manuale(sintesi)
     return {
-        "sintesi": str(dati.get("sintesi", "")).strip(),
+        "sintesi": sintesi,
         "suggerimento": str(dati.get("suggerimento", "")).strip(),
     }

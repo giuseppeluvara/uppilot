@@ -71,6 +71,28 @@ def test_export_in_chiaro_sostituisce_i_placeholder(db, django_user_model):
     assert "DATI PERSONALI REALI" in chiaro  # avviso in chiaro
 
 
+def test_export_pseudonimizzato_non_usa_titolo_reale_o_residui(db, django_user_model):
+    u = django_user_model.objects.create_user(username="p", password="x")
+    lavoro = Lavoro.objects.create(
+        utente=u,
+        titolo="Causa Tizio Bianchi",
+        mappa_entita={"[PRIVATE_PERSON_1]": "Tizio Bianchi"},
+    )
+    Bozza.objects.create(
+        lavoro=lavoro,
+        in_fatto="Tizio Bianchi agisce contro [PRIVATE_PERSON_1].",
+    )
+
+    pseudo = _testi(genera_docx(lavoro, in_chiaro=False))
+    chiaro = _testi(genera_docx(lavoro, in_chiaro=True))
+
+    assert f"Fascicolo #{lavoro.id}" in pseudo
+    assert "Causa Tizio Bianchi" not in pseudo
+    assert "Tizio" not in pseudo and "Bianchi" not in pseudo
+    assert "[PRIVATE_PERSON_1]" in pseudo
+    assert "Causa Tizio Bianchi" in chiaro
+
+
 def test_export_include_motivazione_e_pqm(db, django_user_model):
     u = django_user_model.objects.create_user(username="m", password="x")
     lavoro = Lavoro.objects.create(utente=u, titolo="Caso Editor")

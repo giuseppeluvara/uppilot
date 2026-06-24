@@ -5,6 +5,43 @@ export interface Utente {
   ruolo: string;
 }
 
+export interface ProgressoTask {
+  fase?: string;
+  corrente?: number;
+  totale?: number;
+  percentuale?: number;
+  messaggio?: string;
+}
+
+export interface PrivacyReport {
+  ok: boolean;
+  leaks: { placeholder: string; token: string }[];
+  malformed_placeholders: string[];
+  warnings: number;
+}
+
+export interface WorkflowChecklist {
+  documenti_caricati: number;
+  documenti_pronti: number;
+  documenti_da_verificare: number;
+  documenti_in_lavorazione: number;
+  analisi_pronta: boolean;
+  analisi_parziale: boolean;
+  analisi_completata: boolean;
+  richieste_totali: number;
+  richieste_approfondite: number;
+  motivazioni_redatte: number;
+  pqm_compilato: boolean;
+}
+
+export interface DocumentiStatistiche {
+  totali: number;
+  in_lavorazione: number;
+  pseudonimizzati: number;
+  accettati: number;
+  da_verificare: number;
+}
+
 export interface Documento {
   id: number;
   file: string;
@@ -20,6 +57,7 @@ export interface Documento {
   mappa_entita: Record<string, string>;
   stato_accettazione: "da_verificare" | "verificato" | "accettato_senza_verifica";
   utilizzabile: boolean;
+  privacy_report: PrivacyReport;
 }
 
 export interface Sezione {
@@ -36,12 +74,18 @@ export interface Lavoro {
   stato: string;
   analisi_stato: StatoLavorazione;
   analisi_errore: string;
+  analisi_progresso: ProgressoTask;
   approfondimento_stato: StatoLavorazione;
   approfondimento_errore: string;
+  approfondimento_progresso: ProgressoTask;
   ricerca_stato: StatoLavorazione;
   ricerca_errore: string;
+  ricerca_progresso: ProgressoTask;
   modello_testo: string;
   sezioni: Sezione[];
+  documenti_statistiche: DocumentiStatistiche;
+  checklist: WorkflowChecklist;
+  privacy_report: PrivacyReport;
   created_at: string;
   updated_at: string;
 }
@@ -75,6 +119,8 @@ export interface Spunto {
   sintesi: string;
   suggerimento: string;
   fonte: string;
+  fonte_affidabilita: "alta" | "media" | "bassa" | "non_indicata";
+  fonte_label: string;
   origine: "web" | "manuale";
   created_at: string;
 }
@@ -123,6 +169,7 @@ export interface StatoGrafo {
   in_corso: boolean;
   n_nodi: number;
   n_archi: number;
+  progresso: ProgressoTask;
 }
 
 export interface RisultatoCorpus {
@@ -132,4 +179,5 @@ export interface RisultatoCorpus {
   ordine: number;
   testo: string;
   distanza: number;
+  rilevanza: "alta" | "media" | "bassa";
 }

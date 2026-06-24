@@ -13,6 +13,7 @@ Principio §1: i punti discrezionali restano quesiti, riportati come callout
 """
 from __future__ import annotations
 
+import re
 from io import BytesIO
 from pathlib import Path
 
@@ -23,6 +24,8 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor
+
+from apps.casi.privacy import maschera_residui
 
 from .models import Bozza
 
@@ -129,6 +132,15 @@ def _depseudonimizza(testo: str, mappa: dict) -> str:
     # Placeholder più lunghi prima, per evitare collisioni di prefisso.
     for ph in sorted(mappa, key=len, reverse=True):
         testo = testo.replace(ph, mappa[ph])
+    return _pulizia_spazi_chiaro(testo)
+
+
+def _pulizia_spazi_chiaro(testo: str) -> str:
+    if not testo:
+        return testo
+    testo = re.sub(r"\b(via|viale|piazza|corso|largo)([A-ZÀ-Ö])", r"\1 \2", testo)
+    testo = re.sub(r"\s+([,.;:!?])", r"\1", testo)
+    testo = re.sub(r"[ \t]{2,}", " ", testo)
     return testo
 
 
@@ -138,18 +150,19 @@ def genera_docx(lavoro, in_chiaro: bool = False) -> bytes:
         _applica_stili(doc)
     _assicura_stile_quesito(doc)
 
-    # In chiaro: registro entità a livello di lavoro; altrimenti nessuna sostituzione.
-    mappa = lavoro.mappa_entita if in_chiaro else {}
+    mappa = lavoro.mappa_entita or {}
 
     def chiaro(t):
-        return _depseudonimizza(t, mappa)
+        if in_chiaro:
+            return _depseudonimizza(t or "", mappa)
+        return maschera_residui(t or "", mappa)
 
     # --- Intestazione ---
     titolo = doc.add_paragraph("BOZZA DI PROVVEDIMENTO", style="Title")
     titolo.alignment = WD_ALIGN_PARAGRAPH.CENTER
     sub = doc.add_paragraph()
     sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run_sub = sub.add_run(chiaro(lavoro.titolo))
+    run_sub = sub.add_run(chiaro(lavoro.titolo) if in_chiaro else f"Fascicolo #{lavoro.id}")
     run_sub.italic = True
 
     avviso = doc.add_paragraph()
@@ -203,7 +216,12 @@ def genera_docx(lavoro, in_chiaro: bool = False) -> bytes:
         if allegati:
             p = doc.add_paragraph()
             p.add_run("Allegati collegati: ").bold = True
-            p.add_run(", ".join(_nome_file(a.file.name) for a in allegati))
+            p.add_run(
+                ", ".join(
+                    _nome_file(a.file.name) if in_chiaro else f"Documento {a.id}"
+                    for a in allegati
+                )
+            )
 
         for q in r.quesiti_aperti:
             qp = doc.add_paragraph(style="Quesito")

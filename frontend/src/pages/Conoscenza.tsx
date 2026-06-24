@@ -7,6 +7,7 @@ import circular from "graphology-layout/circular";
 import { Loader2, Network, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { api, ApiError } from "@/api";
 import type { ArcoGrafo, Grafo, NodoGrafo, StatoGrafo } from "@/types";
+import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,7 @@ import { Separator } from "@/components/ui/separator";
 import { Toggle } from "@/components/ui/toggle";
 
 const CHART_TOKENS = ["--chart-1", "--chart-2", "--chart-3", "--chart-4", "--chart-5"];
+const FALLBACK_PALETTE = ["#2563eb", "#059669", "#d97706", "#7c3aed", "#dc2626", "#0891b2"];
 
 const TIPO_LABEL: Record<NodoGrafo["tipo"], string> = {
   concetto: "Concetto/istituto",
@@ -33,6 +35,7 @@ const ARCO_LABEL: Record<ArcoGrafo["tipo"], string> = {
 
 export function Conoscenza() {
   const [grafo, setGrafo] = useState<Grafo | null>(null);
+  const [stato, setStato] = useState<StatoGrafo | null>(null);
   const [selezionato, setSelezionato] = useState<number | null>(null);
   const [tipiAttivi, setTipiAttivi] = useState<Set<NodoGrafo["tipo"]>>(
     new Set(["concetto", "riferimento", "caso"]),
@@ -45,7 +48,12 @@ export function Conoscenza() {
 
   const carica = useCallback(async () => {
     try {
-      setGrafo(await api.get<Grafo>("/grafo/"));
+      const [g, s] = await Promise.all([
+        api.get<Grafo>("/grafo/"),
+        api.get<StatoGrafo>("/grafo/stato/"),
+      ]);
+      setGrafo(g);
+      setStato(s);
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "Errore di caricamento.");
     }
@@ -62,6 +70,14 @@ export function Conoscenza() {
   }, [grafo]);
 
   const nodoSelezionato = selezionato !== null ? perId.get(selezionato) ?? null : null;
+
+  const risultatiRicerca = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q || !grafo) return [];
+    return grafo.nodi
+      .filter((n) => tipiAttivi.has(n.tipo) && n.etichetta.toLowerCase().includes(q))
+      .slice(0, 8);
+  }, [query, grafo, tipiAttivi]);
 
   const vicini = useMemo(() => {
     if (selezionato === null || !grafo) return [];
@@ -98,10 +114,15 @@ export function Conoscenza() {
     forceAtlas2.assign(g, { iterations: 120, settings: forceAtlas2.inferSettings(g) });
     louvain.assign(g);
     const styles = getComputedStyle(document.documentElement);
-    const palette = CHART_TOKENS.map((token) => styles.getPropertyValue(token).trim()).filter(Boolean);
-    if (palette.length === 0) palette.push(styles.getPropertyValue("--primary").trim());
-    const edgeColor = styles.getPropertyValue("--border").trim();
-    const labelColor = styles.getPropertyValue("--muted-foreground").trim();
+    const coloreUsabile = (value: string) => /^(#|rgb|hsl)/i.test(value);
+    const palette = CHART_TOKENS.map((token) => styles.getPropertyValue(token).trim()).filter(coloreUsabile);
+    if (palette.length < 3) palette.splice(0, palette.length, ...FALLBACK_PALETTE);
+    const edgeColor = coloreUsabile(styles.getPropertyValue("--border").trim())
+      ? styles.getPropertyValue("--border").trim()
+      : "#cbd5e1";
+    const labelColor = coloreUsabile(styles.getPropertyValue("--muted-foreground").trim())
+      ? styles.getPropertyValue("--muted-foreground").trim()
+      : "#475569";
     g.forEachNode((node, attrs) =>
       g.setNodeAttribute(node, "color", palette[((attrs.community as number) ?? 0) % palette.length]),
     );
@@ -110,7 +131,8 @@ export function Conoscenza() {
       renderEdgeLabels: false,
       defaultEdgeColor: edgeColor,
       labelColor: { color: labelColor },
-      labelDensity: 0.7,
+      labelDensity: 0.35,
+      labelRenderedSizeThreshold: 8,
     });
     renderer.on("clickNode", ({ node }) => setSelezionato(Number(node)));
     renderer.on("clickStage", () => setSelezionato(null));
@@ -122,10 +144,8 @@ export function Conoscenza() {
     };
   }, [grafo, tipiAttivi]);
 
-  function centra(query: string) {
-    const q = query.trim().toLowerCase();
-    if (!q || !grafo || !sigma.current) return;
-    const trovato = grafo.nodi.find((n) => n.etichetta.toLowerCase().includes(q));
+  function centraNodo(trovato: NodoGrafo | undefined) {
+    if (!sigma.current) return;
     if (!trovato) {
       toast.error("Nessun nodo trovato.");
       return;
@@ -133,6 +153,11 @@ export function Conoscenza() {
     setSelezionato(trovato.id);
     const pos = sigma.current.getNodeDisplayData(String(trovato.id));
     if (pos) sigma.current.getCamera().animate({ x: pos.x, y: pos.y, ratio: 0.4 }, { duration: 500 });
+  }
+
+  function centra(query: string) {
+    if (!query.trim() || !grafo || !sigma.current) return;
+    centraNodo(risultatiRicerca[0]);
   }
 
   async function aggiorna() {
@@ -143,6 +168,7 @@ export function Conoscenza() {
       for (let i = 0; i < 120; i++) {
         await new Promise((r) => setTimeout(r, 3000));
         const s = await api.get<StatoGrafo>("/grafo/stato/");
+        setStato(s);
         if (!s.in_corso) break;
       }
       await carica();
@@ -174,6 +200,8 @@ export function Conoscenza() {
   }
 
   const vuoto = grafo !== null && grafo.nodi.length === 0;
+  const costruzioneAttiva = costruendo || Boolean(stato?.in_corso);
+  const progresso = stato?.progresso;
 
   return (
     <div className="grid gap-6">
@@ -206,9 +234,9 @@ export function Conoscenza() {
                 className="h-9 w-48 pl-8"
               />
             </form>
-            <Button onClick={aggiorna} disabled={costruendo}>
-              {costruendo ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-              {costruendo ? "Costruzione…" : "Aggiorna grafo"}
+            <Button onClick={aggiorna} disabled={costruzioneAttiva}>
+              {costruzioneAttiva ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+              {costruzioneAttiva ? "Costruzione…" : "Aggiorna grafo"}
             </Button>
           </div>
         </CardHeader>
@@ -230,6 +258,21 @@ export function Conoscenza() {
             </span>
           </div>
 
+          {costruzioneAttiva && progresso && (
+            <div className="grid gap-1 rounded-lg border bg-muted/20 p-3">
+              <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                <span>{progresso.messaggio || "Costruzione del grafo in corso"}</span>
+                <span>{progresso.percentuale ?? 0}%</span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-primary transition-all"
+                  style={{ width: `${Math.max(0, Math.min(100, progresso.percentuale ?? 0))}%` }}
+                />
+              </div>
+            </div>
+          )}
+
           {vuoto ? (
             <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed py-16 text-center">
               <Network className="size-8 text-muted-foreground" />
@@ -240,8 +283,35 @@ export function Conoscenza() {
           ) : (
             <div className="grid gap-3 lg:grid-cols-[1fr_18rem]">
               <div ref={container} className="h-[70vh] w-full rounded-lg border bg-muted/20" />
-              {nodoSelezionato ? (
-                <div className="rounded-lg border p-3">
+              <div className="grid gap-3">
+                {query.trim() && (
+                  <div className="rounded-lg border p-3">
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      Risultati ricerca
+                    </p>
+                    {risultatiRicerca.length === 0 ? (
+                      <p className="mt-2 text-sm text-muted-foreground">Nessun nodo trovato.</p>
+                    ) : (
+                      <div className="mt-2 grid gap-1">
+                        {risultatiRicerca.map((n) => (
+                          <button
+                            key={n.id}
+                            onClick={() => centraNodo(n)}
+                            className={cn(
+                              "rounded-md px-2 py-1 text-left text-sm hover:bg-accent",
+                              selezionato === n.id && "bg-accent",
+                            )}
+                          >
+                            <span className="block font-medium">{n.etichetta}</span>
+                            <span className="text-xs text-muted-foreground">{TIPO_LABEL[n.tipo]}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {nodoSelezionato ? (
+                  <div className="rounded-lg border p-3">
                   <div className="flex items-start justify-between gap-2">
                     <Badge variant="secondary">{TIPO_LABEL[nodoSelezionato.tipo]}</Badge>
                     <Button
@@ -290,12 +360,13 @@ export function Conoscenza() {
                     <Trash2 className="size-4" />
                     Elimina nodo
                   </Button>
-                </div>
-              ) : (
-                <div className="hidden rounded-lg border border-dashed p-3 text-sm text-muted-foreground lg:block">
-                  Clicca un nodo per vederne il dettaglio e i collegamenti.
-                </div>
-              )}
+                  </div>
+                ) : (
+                  <div className="hidden rounded-lg border border-dashed p-3 text-sm text-muted-foreground lg:block">
+                    Clicca un nodo per vederne il dettaglio e i collegamenti.
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </CardContent>

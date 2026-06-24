@@ -10,6 +10,7 @@ from django.db import transaction
 from ai.factory import get_anonymization_service, get_ocr_backend
 
 from .models import Documento, Lavoro
+from .privacy import maschera_residui, normalizza_entita, normalizza_spazi_placeholder
 from .services.extraction import estrai_testo
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,9 @@ def _canonicalizza(lavoro: Lavoro, testo: str, mappa: dict) -> tuple[str, dict]:
     """
     registro = dict(lavoro.mappa_entita)  # canonico -> reale
     inverso = {v: k for k, v in registro.items()}
+    inverso_norm = {
+        normalizza_entita(v): k for k, v in registro.items() if normalizza_entita(v)
+    }
     contatori: dict[str, int] = {}
     for ph in registro:
         g = _gruppo(ph)
@@ -48,19 +52,45 @@ def _canonicalizza(lavoro: Lavoro, testo: str, mappa: dict) -> tuple[str, dict]:
         token_di[ph] = f"\x00{i}\x00"
         testo = testo.replace(ph, token_di[ph])
 
+    def trova_canonico(reale: str) -> str | None:
+        norm = normalizza_entita(reale)
+        if not norm:
+            return None
+        if norm in inverso_norm:
+            return inverso_norm[norm]
+        tokens = set(norm.split())
+        for norm_esistente, canonico in inverso_norm.items():
+            if not norm_esistente:
+                continue
+            tokens_esistenti = set(norm_esistente.split())
+            if (len(tokens) > 1 or len(tokens_esistenti) > 1) and (
+                norm in norm_esistente or norm_esistente in norm
+            ):
+                return canonico
+            if tokens and tokens_esistenti:
+                inter = tokens & tokens_esistenti
+                base = min(len(tokens), len(tokens_esistenti))
+                if base and len(inter) / base >= 0.75:
+                    return canonico
+        return None
+
     # Fase 2: token -> placeholder canonico.
     for ph, reale in mappa.items():
         reale_n = (reale or "").strip()
-        canon = inverso.get(reale_n)
+        canon = inverso.get(reale_n) or trova_canonico(reale_n)
         if not canon:
             g = _gruppo(ph)
             contatori[g] = contatori.get(g, 0) + 1
             canon = f"[{g}_{contatori[g]}]"
             registro[canon] = reale_n
             inverso[reale_n] = canon
+            norm = normalizza_entita(reale_n)
+            if norm:
+                inverso_norm[norm] = canon
         testo = testo.replace(token_di[ph], canon)
         doc_map[canon] = reale_n
 
+    testo = normalizza_spazi_placeholder(maschera_residui(testo, registro))
     lavoro.mappa_entita = registro
     lavoro.save(update_fields=["mappa_entita"])
     return testo, doc_map

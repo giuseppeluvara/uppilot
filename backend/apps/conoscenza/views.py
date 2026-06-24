@@ -73,6 +73,7 @@ class StatoView(APIView):
                 "in_corso": meta.in_corso,
                 "n_nodi": len(ids),
                 "n_archi": Arco.objects.filter(da_id__in=ids, a_id__in=ids).count(),
+                "progresso": meta.progresso or {},
             }
         )
 

@@ -31,6 +31,7 @@ class Lavoro(models.Model):
         default=StatoAnalisi.IN_ATTESA,
     )
     analisi_errore = models.TextField(blank=True)
+    analisi_progresso = models.JSONField(default=dict, blank=True)
     # ID del task Celery in corso: serve per poterlo revocare (interruzione utente).
     analisi_task_id = models.CharField(max_length=255, blank=True)
     # Avanzamento del ragionamento "in diritto" per richiesta (M2).
@@ -40,6 +41,7 @@ class Lavoro(models.Model):
         default=StatoAnalisi.IN_ATTESA,
     )
     approfondimento_errore = models.TextField(blank=True)
+    approfondimento_progresso = models.JSONField(default=dict, blank=True)
     approfondimento_task_id = models.CharField(max_length=255, blank=True)
     # Avanzamento della ricerca giuridica "spunti" (M2, §6).
     ricerca_stato = models.CharField(
@@ -48,6 +50,7 @@ class Lavoro(models.Model):
         default=StatoAnalisi.IN_ATTESA,
     )
     ricerca_errore = models.TextField(blank=True)
+    ricerca_progresso = models.JSONField(default=dict, blank=True)
     ricerca_task_id = models.CharField(max_length=255, blank=True)
     # Registro entità a livello di lavoro: placeholder canonico -> valore reale.
     # Garantisce placeholder coerenti tra i documenti e abilita l'export "in chiaro".
