@@ -10,6 +10,8 @@ import {
   FolderOpen,
   HelpCircle,
   Loader2,
+  Maximize2,
+  Minimize2,
   Play,
   Save,
   Scale,
@@ -20,7 +22,16 @@ import {
   Upload,
 } from "lucide-react";
 import { api, ApiError } from "@/api";
-import type { Bozza, Documento, Lavoro, Richiesta, Sezione, Spunto } from "@/types";
+import type {
+  Bozza,
+  Documento,
+  Lavoro,
+  PrivacyReport,
+  ProgressoTask,
+  Richiesta,
+  Sezione,
+  Spunto,
+} from "@/types";
 import { statoLavoro } from "@/lib/stato";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -186,6 +197,8 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
       : daAccettare
         ? "Rivedi e accetta almeno un documento pseudonimizzato prima di avviare l'analisi."
         : "Carica almeno un documento, attendi la pseudonimizzazione e accettalo prima di avviare l'analisi.";
+  const analisiParziale = Boolean(lavoro.checklist?.analisi_parziale);
+  const privacyReport = lavoro.privacy_report;
   const nomiAllegati: Record<number, string> = {};
   for (const sez of lavoro.sezioni)
     for (const d of sez.documenti) nomiAllegati[d.id] = baseName(d.file);
@@ -201,6 +214,36 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
     }, files.length > 1 ? `${files.length} documenti caricati` : "Documento caricato");
   }
 
+  function avviaAnalisi() {
+    let conferma_parziale = false;
+    if (analisiParziale) {
+      conferma_parziale = window.confirm(
+        "Ci sono documenti pseudonimizzati non ancora accettati. Vuoi avviare comunque l'analisi usando solo i documenti già pronti?",
+      );
+      if (!conferma_parziale) return;
+    }
+    avvia(
+      "analisi",
+      () => api.post(`/lavori/${id}/analizza/`, { commerciale, conferma_parziale }),
+      "Analisi avviata",
+    );
+  }
+
+  function confermaExport(inChiaro: boolean) {
+    if (inChiaro) {
+      return window.confirm(
+        "Stai scaricando la versione in chiaro con i dati personali reali. Procedere?",
+      );
+    }
+    const warnings = privacyReport?.warnings ?? 0;
+    if (warnings > 0) {
+      return window.confirm(
+        "Il controllo privacy segnala possibili residui nel testo pseudonimizzato. Vuoi scaricare comunque il Word?",
+      );
+    }
+    return true;
+  }
+
   return (
     <div className="grid gap-6">
       <div className="flex items-center gap-3">
@@ -212,6 +255,9 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
         <h1 className="text-xl font-semibold tracking-tight">{lavoro.titolo}</h1>
         <Badge variant={s.variant}>{s.label}</Badge>
       </div>
+
+      <WorkflowCard lavoro={lavoro} richieste={richieste} />
+      <PrivacyReportAlert report={lavoro.privacy_report} />
 
       <section className="grid gap-4">
         <div className="flex items-center justify-between">
@@ -281,7 +327,9 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
         lavoro={lavoro}
         inCorso={analisiInCorso}
         blocco={bloccoAnalisi}
-        onAvvia={() => avvia("analisi", () => api.post(`/lavori/${id}/analizza/`, { commerciale }), "Analisi avviata")}
+        parziale={analisiParziale}
+        progresso={lavoro.analisi_progresso}
+        onAvvia={avviaAnalisi}
         onInterrompi={() => annulla("analisi", "analisi")}
       />
 
@@ -289,9 +337,11 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
         <BozzaEditor
           bozza={bozza}
           onScarica={() =>
+            confermaExport(false) &&
             azione(() => api.download(`/lavori/${id}/esporta/`, `bozza_${id}.docx`), "Documento scaricato")
           }
           onScaricaChiaro={() =>
+            confermaExport(true) &&
             azione(
               () => api.download(`/lavori/${id}/esporta/?chiaro=1`, `bozza_${id}_in_chiaro.docx`),
               "Documento in chiaro scaricato",
@@ -311,6 +361,7 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
           richieste={richieste}
           nomiAllegati={nomiAllegati}
           inCorso={approfInCorso}
+          progresso={lavoro.approfondimento_progresso}
           onApprofondisci={() =>
             avvia("approf", () => api.post(`/lavori/${id}/approfondisci/`, { commerciale }), "Approfondimento avviato")
           }
@@ -326,6 +377,7 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
           lavoro={lavoro}
           spunti={spunti}
           inCorso={ricercaInCorso}
+          progresso={lavoro.ricerca_progresso}
           onInterrompi={() => annulla("ricerca", "ricerca")}
           onCercaWeb={() => avvia("ricerca", () => api.post(`/lavori/${id}/ricerca/`, { commerciale }), "Ricerca avviata")}
           onManuale={(argomento, materiale) =>
@@ -491,6 +543,107 @@ function MotoreCard({
             <AlertDescription>{WARNING_COMMERCIALE}</AlertDescription>
           </Alert>
         )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ProgressMeter({ progress }: { progress?: ProgressoTask }) {
+  if (!progress || (!progress.messaggio && progress.percentuale === undefined)) return null;
+  const percentuale = Math.max(0, Math.min(100, progress.percentuale ?? 0));
+  return (
+    <div className="grid gap-1 rounded-lg border bg-muted/20 p-3">
+      <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+        <span>{progress.messaggio || progress.fase || "Elaborazione in corso"}</span>
+        <span>{percentuale}%</span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-muted">
+        <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${percentuale}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function PrivacyReportAlert({ report }: { report?: PrivacyReport }) {
+  if (!report || report.ok) return null;
+  const leak = report.leaks.slice(0, 5).map((l) => `${l.token} (${l.placeholder})`);
+  return (
+    <Alert variant="destructive">
+      <ShieldAlert />
+      <AlertTitle>Controllo privacy da rivedere</AlertTitle>
+      <AlertDescription>
+        {leak.length > 0 && <>Possibili residui: {leak.join(", ")}. </>}
+        {report.malformed_placeholders.length > 0 &&
+          <>Placeholder anomali: {report.malformed_placeholders.slice(0, 3).join(", ")}. </>}
+        Rivedi l'anonimizzazione prima di esportare o rilanciare analisi sensibili.
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+function WorkflowCard({ lavoro, richieste }: { lavoro: Lavoro; richieste: Richiesta[] }) {
+  const c = lavoro.checklist;
+  const approfondite = c.richieste_totali > 0 && c.richieste_approfondite === c.richieste_totali;
+  const motivazioni = Math.max(c.motivazioni_redatte, richieste.filter((r) => r.motivazione.trim()).length);
+  const passi = [
+    {
+      label: "Documenti",
+      done: c.documenti_caricati > 0,
+      current: c.documenti_caricati === 0,
+      detail: `${c.documenti_caricati} caricati`,
+    },
+    {
+      label: "Privacy",
+      done: c.documenti_pronti > 0 && c.documenti_da_verificare === 0,
+      current: c.documenti_caricati > 0 && c.documenti_pronti === 0,
+      detail: `${c.documenti_pronti} pronti · ${c.documenti_da_verificare} da verificare`,
+    },
+    {
+      label: "Analisi",
+      done: c.analisi_completata,
+      current: c.analisi_pronta && !c.analisi_completata,
+      detail: c.analisi_parziale ? "Pronta con fascicolo parziale" : c.analisi_pronta ? "Pronta" : "In attesa",
+    },
+    {
+      label: "In diritto",
+      done: approfondite,
+      current: c.analisi_completata && !approfondite,
+      detail: `${c.richieste_approfondite}/${c.richieste_totali} richieste`,
+    },
+    {
+      label: "Bozza",
+      done: motivazioni > 0 || c.pqm_compilato,
+      current: c.analisi_completata && motivazioni === 0 && !c.pqm_compilato,
+      detail: `${motivazioni} motivazioni · P.Q.M. ${c.pqm_compilato ? "ok" : "vuoto"}`,
+    },
+  ];
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Percorso fascicolo</CardTitle>
+      </CardHeader>
+      <CardContent className="grid gap-3 sm:grid-cols-5">
+        {passi.map((p) => (
+          <div
+            key={p.label}
+            className={cn(
+              "grid min-h-24 gap-2 rounded-lg border p-3",
+              p.done ? "border-primary/30 bg-primary/5" : p.current ? "border-amber-300 bg-amber-50/60 dark:bg-amber-950/20" : "bg-muted/20",
+            )}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm font-medium">{p.label}</span>
+              {p.done ? (
+                <CircleCheck className="size-4 text-primary" />
+              ) : p.current ? (
+                <Loader2 className="size-4 animate-spin text-amber-600" />
+              ) : (
+                <span className="size-4 rounded-full border" />
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">{p.detail}</p>
+          </div>
+        ))}
       </CardContent>
     </Card>
   );
@@ -715,6 +868,8 @@ function RevisionePrivacy({
           </DialogDescription>
         </DialogHeader>
 
+        <PrivacyReportAlert report={doc.privacy_report} />
+
         <ScrollArea className="max-h-48 rounded-md border p-3">
           <p className="whitespace-pre-wrap text-sm">{doc.testo_pseudonimizzato || "—"}</p>
         </ScrollArea>
@@ -771,12 +926,16 @@ function AnalisiCard({
   lavoro,
   inCorso,
   blocco,
+  parziale,
+  progresso,
   onAvvia,
   onInterrompi,
 }: {
   lavoro: Lavoro;
   inCorso: boolean;
   blocco: string;
+  parziale: boolean;
+  progresso?: ProgressoTask;
   onAvvia: () => void;
   onInterrompi: () => void;
 }) {
@@ -797,6 +956,17 @@ function AnalisiCard({
           Sintetizza il fatto ed estrae le richieste delle parti. Usa solo i documenti accettati
           e pseudonimizzati.
         </p>
+        {inCorso && <ProgressMeter progress={progresso} />}
+        {parziale && !blocco && (
+          <Alert>
+            <TriangleAlert />
+            <AlertTitle>Fascicolo parziale</AlertTitle>
+            <AlertDescription>
+              Alcuni documenti pseudonimizzati non sono ancora stati accettati. L'analisi userà solo
+              quelli pronti e richiederà conferma prima di partire.
+            </AlertDescription>
+          </Alert>
+        )}
         {blocco && (
           <Alert>
             <TriangleAlert />
@@ -828,6 +998,7 @@ function BozzaEditor({
   onScaricaChiaro: () => void;
 }) {
   const [testo, setTesto] = useState(bozza.in_fatto);
+  const [espanso, setEspanso] = useState(false);
   useEffect(() => setTesto(bozza.in_fatto), [bozza.in_fatto, bozza.versione]);
 
   return (
@@ -836,6 +1007,9 @@ function BozzaEditor({
         <CardTitle>Bozza — In fatto</CardTitle>
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground">versione {bozza.versione}</span>
+          <Button variant="ghost" size="icon-sm" onClick={() => setEspanso((v) => !v)} aria-label="Espandi editor">
+            {espanso ? <Minimize2 /> : <Maximize2 />}
+          </Button>
           <Button variant="outline" size="sm" onClick={onScarica}>
             <Download />
             Scarica Word
@@ -854,7 +1028,11 @@ function BozzaEditor({
         </div>
       </CardHeader>
       <CardContent className="grid gap-3">
-        <Textarea value={testo} onChange={(e) => setTesto(e.target.value)} className="min-h-40" />
+        <Textarea
+          value={testo}
+          onChange={(e) => setTesto(e.target.value)}
+          className={cn("min-h-40 max-h-[50vh] overflow-y-auto resize-y", espanso && "min-h-[70vh] max-h-[70vh]")}
+        />
         <div className="flex justify-end">
           <Button onClick={() => onSalva(testo)} disabled={testo === bozza.in_fatto}>
             <Save />
@@ -925,6 +1103,7 @@ function RichiesteSection({
   richieste,
   nomiAllegati,
   inCorso,
+  progresso,
   onApprofondisci,
   onInterrompi,
   onSalvaMotivazione,
@@ -933,10 +1112,12 @@ function RichiesteSection({
   richieste: Richiesta[];
   nomiAllegati: Record<number, string>;
   inCorso: boolean;
+  progresso?: ProgressoTask;
   onApprofondisci: () => void;
   onInterrompi: () => void;
   onSalvaMotivazione: (richiestaId: number, testo: string) => void;
 }) {
+  const approfondite = richieste.filter((r) => r.stato === "approfondita").length;
   return (
     <div className="grid gap-3">
       <div className="flex items-center justify-between">
@@ -949,6 +1130,30 @@ function RichiesteSection({
           </Button>
         </div>
       </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant="secondary">{richieste.length} richieste</Badge>
+        <Badge variant="outline">{approfondite} approfondite</Badge>
+        <Badge variant="outline">
+          {richieste.reduce((n, r) => n + r.allegati_collegati.length, 0)} allegati collegati
+        </Badge>
+        <Badge variant="outline">
+          {richieste.reduce((n, r) => n + r.quesiti_aperti.length, 0)} quesiti aperti
+        </Badge>
+      </div>
+
+      {inCorso && <ProgressMeter progress={progresso} />}
+
+      {richieste.length > 0 && approfondite < richieste.length && (
+        <Alert>
+          <HelpCircle />
+          <AlertTitle>Griglia in estrazione base</AlertTitle>
+          <AlertDescription>
+            Le domande sono state individuate, ma onere probatorio, allegati pertinenti,
+            non contestazioni e quesiti completi arrivano con l'approfondimento in diritto.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {lavoro.approfondimento_stato === "errore" && (
         <Alert variant="destructive">
@@ -1034,6 +1239,7 @@ function RicercaCard({
   lavoro,
   spunti,
   inCorso,
+  progresso,
   onCercaWeb,
   onInterrompi,
   onManuale,
@@ -1041,6 +1247,7 @@ function RicercaCard({
   lavoro: Lavoro;
   spunti: Spunto[];
   inCorso: boolean;
+  progresso?: ProgressoTask;
   onCercaWeb: () => void;
   onInterrompi: () => void;
   onManuale: (argomento: string, materiale: string) => void;
@@ -1062,6 +1269,7 @@ function RicercaCard({
         <p className="text-sm text-muted-foreground">
           Suggerimenti da valutare, non citazioni definitive. La query esce sempre pseudonimizzata.
         </p>
+        {inCorso && <ProgressMeter progress={progresso} />}
         {lavoro.ricerca_stato === "errore" && (
           <Alert variant="destructive">
             <TriangleAlert />
@@ -1079,6 +1287,17 @@ function RicercaCard({
               <div key={sp.id} className="rounded-lg border p-3">
                 <div className="flex items-center gap-2">
                   <Badge variant="secondary">{sp.origine}</Badge>
+                  <Badge
+                    variant={
+                      sp.fonte_affidabilita === "alta"
+                        ? "default"
+                        : sp.fonte_affidabilita === "bassa"
+                          ? "destructive"
+                          : "outline"
+                    }
+                  >
+                    {sp.fonte_label}
+                  </Badge>
                   <span className="text-sm font-medium">{sp.argomento || "Spunto"}</span>
                 </div>
                 <p className="mt-2 text-sm text-muted-foreground">{sp.sintesi}</p>

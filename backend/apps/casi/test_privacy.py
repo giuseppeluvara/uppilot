@@ -86,3 +86,51 @@ def test_accetta_tutti(documento):
     assert resp.data["accettati"] == 1
     documento.refresh_from_db()
     assert documento.utilizzabile is True
+
+
+def test_canonicalizzazione_cross_documento_e_residui(db, django_user_model, monkeypatch):
+    utente = django_user_model.objects.create_user(username="canon", password="x")
+    lavoro = Lavoro.objects.create(utente=utente, titolo="Causa Alfa")
+    sezione = SezioneDocumenti.objects.create(
+        lavoro=lavoro, tipo=SezioneDocumenti.Tipo.ATTORE
+    )
+    doc1 = Documento.objects.create(
+        sezione=sezione,
+        file="a.pdf",
+        testo_estratto="Alfa Srl e Paolo Neri.",
+        stato_estrazione=Documento.StatoEstrazione.COMPLETATO,
+    )
+    doc2 = Documento.objects.create(
+        sezione=sezione,
+        file="b.pdf",
+        testo_estratto="Alfa Costruzioni S.r.l.",
+        stato_estrazione=Documento.StatoEstrazione.COMPLETATO,
+    )
+    risultati = [
+        AnonymizationResult(
+            "[ORG_1] agisce contro Paolo Neri.",
+            {"[ORG_1]": "Alfa S.r.l.", "[PERSON_1]": "Paolo Neri"},
+        ),
+        AnonymizationResult(
+            "[ORG_1] deposita memoria.",
+            {"[ORG_1]": "Alfa Costruzioni S.r.l."},
+        ),
+    ]
+
+    monkeypatch.setattr(
+        tasks,
+        "get_anonymization_service",
+        lambda: type("S", (), {"anonymize": lambda self, t: risultati.pop(0)})(),
+    )
+
+    tasks.pseudonimizza_documento(doc1.id)
+    tasks.pseudonimizza_documento(doc2.id)
+
+    doc1.refresh_from_db()
+    doc2.refresh_from_db()
+    lavoro.refresh_from_db()
+    assert "[ORG_1]" in doc1.mappa_entita
+    assert "[ORG_1]" in doc2.mappa_entita
+    assert "Paolo" not in doc1.testo_pseudonimizzato
+    assert "Neri" not in doc1.testo_pseudonimizzato
+    assert len([ph for ph, reale in lavoro.mappa_entita.items() if "Alfa" in reale]) == 1

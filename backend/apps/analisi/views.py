@@ -7,7 +7,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from ai.factory import commerciale_disponibile
-from apps.casi.models import Lavoro
+from apps.casi.models import Documento, Lavoro
 
 from .export import genera_docx
 from .models import Bozza, Richiesta, SpuntoRicerca
@@ -38,10 +38,30 @@ def _fase_gia_in_corso(lavoro: Lavoro, campo_stato: str, nome: str):
     )
 
 
-def _marca_in_corso(lavoro: Lavoro, campo_stato: str, campo_errore: str) -> None:
+def _marca_in_corso(
+    lavoro: Lavoro,
+    campo_stato: str,
+    campo_errore: str,
+    campo_progresso: str | None = None,
+    messaggio: str = "Elaborazione avviata",
+) -> None:
     setattr(lavoro, campo_stato, Lavoro.StatoAnalisi.IN_CORSO)
     setattr(lavoro, campo_errore, "")
-    lavoro.save(update_fields=[campo_stato, campo_errore])
+    campi = [campo_stato, campo_errore]
+    if campo_progresso:
+        setattr(
+            lavoro,
+            campo_progresso,
+            {
+                "fase": "avvio",
+                "corrente": 0,
+                "totale": 1,
+                "percentuale": 0,
+                "messaggio": messaggio,
+            },
+        )
+        campi.append(campo_progresso)
+    lavoro.save(update_fields=campi)
 
 
 def _salva_task_id_se_ancora_in_corso(
@@ -75,6 +95,14 @@ def _opt_in_commerciale(request):
     return commerciale, (WARNING_COMMERCIALE if commerciale else None)
 
 
+def _documenti_da_verificare(lavoro: Lavoro):
+    return Documento.objects.filter(
+        sezione__lavoro=lavoro,
+        pseudonimizzato=True,
+        stato_accettazione=Documento.StatoAccettazione.DA_VERIFICARE,
+    )
+
+
 class AvviaAnalisiView(APIView):
     """Avvia l'analisi LLM del lavoro (asincrona)."""
 
@@ -87,11 +115,30 @@ class AvviaAnalisiView(APIView):
                 {"detail": "Nessun documento utilizzabile: caricane e accettane almeno uno."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        non_accettati = _documenti_da_verificare(lavoro).count()
+        if non_accettati and not request.data.get("conferma_parziale"):
+            return Response(
+                {
+                    "detail": (
+                        f"Ci sono {non_accettati} documenti pseudonimizzati non ancora "
+                        "accettati. Conferma esplicitamente l'analisi parziale o rivedili prima."
+                    ),
+                    "code": "analisi_parziale_da_confermare",
+                    "documenti_non_accettati": non_accettati,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
         try:
             commerciale, warning = _opt_in_commerciale(request)
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        _marca_in_corso(lavoro, "analisi_stato", "analisi_errore")
+        _marca_in_corso(
+            lavoro,
+            "analisi_stato",
+            "analisi_errore",
+            "analisi_progresso",
+            "Analisi avviata",
+        )
         res = analizza_lavoro_task.delay(lavoro.id, commerciale)
         _salva_task_id_se_ancora_in_corso(lavoro, "analisi_stato", "analisi_task_id", res.id)
         return Response(
@@ -120,7 +167,13 @@ class ApprofondisciView(APIView):
             commerciale, warning = _opt_in_commerciale(request)
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        _marca_in_corso(lavoro, "approfondimento_stato", "approfondimento_errore")
+        _marca_in_corso(
+            lavoro,
+            "approfondimento_stato",
+            "approfondimento_errore",
+            "approfondimento_progresso",
+            "Approfondimento avviato",
+        )
         res = approfondisci_lavoro_task.delay(lavoro.id, commerciale)
         _salva_task_id_se_ancora_in_corso(
             lavoro, "approfondimento_stato", "approfondimento_task_id", res.id
@@ -146,7 +199,13 @@ class AvviaRicercaView(APIView):
             commerciale, warning = _opt_in_commerciale(request)
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        _marca_in_corso(lavoro, "ricerca_stato", "ricerca_errore")
+        _marca_in_corso(
+            lavoro,
+            "ricerca_stato",
+            "ricerca_errore",
+            "ricerca_progresso",
+            "Ricerca avviata",
+        )
         res = ricerca_spunti_task.delay(lavoro.id, commerciale)
         _salva_task_id_se_ancora_in_corso(lavoro, "ricerca_stato", "ricerca_task_id", res.id)
         return Response(
@@ -176,7 +235,13 @@ class RicercaManualeView(APIView):
             commerciale, warning = _opt_in_commerciale(request)
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        _marca_in_corso(lavoro, "ricerca_stato", "ricerca_errore")
+        _marca_in_corso(
+            lavoro,
+            "ricerca_stato",
+            "ricerca_errore",
+            "ricerca_progresso",
+            "Sintesi manuale avviata",
+        )
         res = ricerca_manuale_task.delay(
             lavoro.id, (request.data.get("argomento") or "").strip(), materiale, commerciale
         )
@@ -189,13 +254,24 @@ class RicercaManualeView(APIView):
 
 # Fase -> (campo task_id, campo stato, campo errore) sul modello Lavoro.
 FASI_ANNULLABILI = {
-    "analisi": ("analisi_task_id", "analisi_stato", "analisi_errore"),
+    "analisi": (
+        "analisi_task_id",
+        "analisi_stato",
+        "analisi_errore",
+        "analisi_progresso",
+    ),
     "approfondimento": (
         "approfondimento_task_id",
         "approfondimento_stato",
         "approfondimento_errore",
+        "approfondimento_progresso",
     ),
-    "ricerca": ("ricerca_task_id", "ricerca_stato", "ricerca_errore"),
+    "ricerca": (
+        "ricerca_task_id",
+        "ricerca_stato",
+        "ricerca_errore",
+        "ricerca_progresso",
+    ),
 }
 
 
@@ -214,7 +290,7 @@ class AnnullaAnalisiView(APIView):
                 {"detail": "Fase non valida: usa 'analisi', 'approfondimento' o 'ricerca'."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        campo_task, campo_stato, campo_errore = FASI_ANNULLABILI[fase]
+        campo_task, campo_stato, campo_errore, campo_progresso = FASI_ANNULLABILI[fase]
 
         task_id = getattr(lavoro, campo_task)
         if task_id:
@@ -233,7 +309,18 @@ class AnnullaAnalisiView(APIView):
         if getattr(lavoro, campo_stato) == Lavoro.StatoAnalisi.IN_CORSO:
             setattr(lavoro, campo_stato, Lavoro.StatoAnalisi.IN_ATTESA)
             setattr(lavoro, campo_errore, "")
-            campi += [campo_stato, campo_errore]
+            setattr(
+                lavoro,
+                campo_progresso,
+                {
+                    "fase": "interrotta",
+                    "corrente": 0,
+                    "totale": 1,
+                    "percentuale": 0,
+                    "messaggio": "Elaborazione interrotta dall'utente",
+                },
+            )
+            campi += [campo_stato, campo_errore, campo_progresso]
         lavoro.save(update_fields=campi)
         return Response({"detail": "Elaborazione interrotta."}, status=status.HTTP_200_OK)
 

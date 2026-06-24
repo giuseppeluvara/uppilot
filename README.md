@@ -124,18 +124,23 @@ Implementazione nativa ispirata a `nashsu/llm_wiki` (nessun codice GPL; solo lib
 
 **Affinamenti** — etichette PII italiane (C.F. / P.IVA / IBAN / PEC / ragioni sociali); resilienza
 dell'anonimizzazione (retry automatico + "Riprova" per documento); placeholder canonici per lavoro
-(coerenti tra documenti, abilitano l'export in chiaro); estrazione richieste robusta (due chiamate
-LLM focalizzate + schema vincolante); fasi asincrone protette da doppio avvio e interrompibili dalla
-UI; editor completo (motivazione "in diritto" + P.Q.M.); anteprima documenti; ricerca nell'archivio;
-corpus con upload file, categorie, limite dimensione configurabile e permessi di visibilità/eliminazione;
-export `.docx` con stile professionale; tema chiaro/scuro, upload multiplo drag & drop e caricamento
-lazy delle schermate frontend.
+(coerenti tra documenti con matching normalizzato/fuzzy controllato, abilitano l'export in chiaro);
+controllo privacy deterministico su residui e placeholder malformati prima di revisione/export;
+export `.docx` pseudonimizzato senza titolo reale o nomi file identificativi, più versione "in chiaro"
+con avviso; estrazione richieste robusta (due chiamate LLM focalizzate + schema vincolante);
+fasi asincrone protette da doppio avvio, interrompibili dalla UI e con progresso persistente
+(analisi, approfondimento, ricerca, grafo); analisi parziale possibile solo con conferma esplicita;
+editor completo (motivazione "in diritto" + P.Q.M.) con layout mobile più gestibile; anteprima
+documenti; ricerca nell'archivio; corpus con upload file, categorie, rilevanza leggibile e permessi
+di visibilità/eliminazione; ricerca giuridica con etichette di affidabilità fonte; grafo con colori
+robusti, progressi e risultati di ricerca cliccabili; tema chiaro/scuro, upload multiplo drag & drop
+e caricamento lazy delle schermate frontend.
 
 ## Stato
 
 **M1 + M2 completi**, validati end-to-end (anche su un fascicolo d'appalto reale). Ultima verifica
-locale: **82 test backend verdi**, build frontend Vite riuscita, smoke test browser su desktop/mobile
-e check Django production senza issue bloccanti. Per l'uso operativo passo per passo vedi la
+locale: **85 test backend verdi**, build frontend Vite riuscita, migrazioni allineate, servizi Docker
+healthy e `manage.py check` senza issue. Per l'uso operativo passo per passo vedi la
 **[Guida operativa](GUIDA.md)**.
 
 ---

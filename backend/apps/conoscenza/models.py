@@ -65,6 +65,7 @@ class GrafoMeta(models.Model):
     """Stato singleton della costruzione del grafo (per il polling lato UI)."""
 
     in_corso = models.BooleanField(default=False)
+    progresso = models.JSONField(default=dict, blank=True)
     aggiornato_at = models.DateTimeField(auto_now=True)
 
     @classmethod

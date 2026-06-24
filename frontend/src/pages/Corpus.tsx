@@ -36,6 +36,12 @@ const STATO: Record<DocumentoCorpus["stato"], { label: string; variant: BadgeVar
   errore: { label: "Errore", variant: "destructive" },
 };
 
+const RILEVANZA: Record<RisultatoCorpus["rilevanza"], { label: string; variant: BadgeVariant }> = {
+  alta: { label: "Rilevanza alta", variant: "default" },
+  media: { label: "Rilevanza media", variant: "outline" },
+  bassa: { label: "Rilevanza bassa", variant: "secondary" },
+};
+
 export function Corpus() {
   const [documenti, setDocumenti] = useState<DocumentoCorpus[]>([]);
   const [titolo, setTitolo] = useState("");
@@ -242,8 +248,11 @@ export function Corpus() {
                 {risultati.map((r, i) => (
                   <div key={i} className="rounded-lg border p-3">
                     <div className="flex items-center gap-2">
-                      <Badge variant="outline">distanza {r.distanza.toFixed(3)}</Badge>
+                      <Badge variant={RILEVANZA[r.rilevanza]?.variant ?? "outline"}>
+                        {RILEVANZA[r.rilevanza]?.label ?? "Rilevanza"}
+                      </Badge>
                       <span className="text-sm font-medium">{r.titolo}</span>
+                      {r.fonte && <span className="text-xs text-muted-foreground">{r.fonte}</span>}
                     </div>
                     <p className="mt-2 text-sm text-muted-foreground">{r.testo}</p>
                   </div>
@@ -307,16 +316,24 @@ export function Corpus() {
                           </Button>
                         </TableCell>
                         <TableCell className="text-right">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="size-7 text-destructive"
-                            aria-label="Elimina documento"
-                            disabled={!d.eliminabile}
-                            onClick={() => setDaEliminare(d)}
+                          <span
+                            title={
+                              d.eliminabile
+                                ? "Elimina documento"
+                                : "Puoi eliminare solo documenti caricati da te"
+                            }
                           >
-                            <Trash2 className="size-4" />
-                          </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="size-7 text-destructive"
+                              aria-label="Elimina documento"
+                              disabled={!d.eliminabile}
+                              onClick={() => setDaEliminare(d)}
+                            >
+                              <Trash2 className="size-4" />
+                            </Button>
+                          </span>
                         </TableCell>
                       </TableRow>
                     );

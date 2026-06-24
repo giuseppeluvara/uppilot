@@ -168,6 +168,14 @@ class CercaView(APIView):
         frammenti = cerca(
             query, get_embedding_backend(), k=k, documenti=_documenti_visibili(request.user)
         )
+
+        def rilevanza(distanza: float) -> str:
+            if distanza <= 0.28:
+                return "alta"
+            if distanza <= 0.38:
+                return "media"
+            return "bassa"
+
         return Response(
             [
                 {
@@ -177,6 +185,7 @@ class CercaView(APIView):
                     "ordine": f.ordine,
                     "testo": f.testo,
                     "distanza": float(f.distanza),
+                    "rilevanza": rilevanza(float(f.distanza)),
                 }
                 for f in frammenti
             ]

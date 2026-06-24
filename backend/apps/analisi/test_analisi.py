@@ -122,6 +122,7 @@ def test_task_persiste_bozza_richieste_e_transiziona(lavoro, monkeypatch):
 
     lavoro.refresh_from_db()
     assert lavoro.analisi_stato == Lavoro.StatoAnalisi.COMPLETATA
+    assert lavoro.analisi_progresso["percentuale"] == 100
     assert lavoro.stato == StatoLavoro.BOZZA_GENERATA
     assert Bozza.objects.get(lavoro=lavoro).in_fatto.startswith("Le parti")
     richiesta = Richiesta.objects.get(lavoro=lavoro)
@@ -146,6 +147,38 @@ def test_endpoint_analizza_gia_in_corso_409(lavoro):
     resp = client.post(f"/api/lavori/{lavoro.id}/analizza/")
 
     assert resp.status_code == 409
+
+
+def test_endpoint_analizza_parziale_richiede_conferma(lavoro, monkeypatch):
+    _doc_accettato(lavoro, SezioneDocumenti.Tipo.ATTORE, "[PRIVATE_PERSON_1] agisce.")
+    sezione = SezioneDocumenti.objects.create(
+        lavoro=lavoro, tipo=SezioneDocumenti.Tipo.CONVENUTO
+    )
+    Documento.objects.create(
+        sezione=sezione,
+        file="y.pdf",
+        testo_pseudonimizzato="[PRIVATE_PERSON_2] resiste.",
+        pseudonimizzato=True,
+        stato_accettazione=Documento.StatoAccettazione.DA_VERIFICARE,
+    )
+    monkeypatch.setattr(
+        tasks,
+        "get_llm_backend",
+        lambda *a, **k: FakeLLM({"in_fatto": "Fatto.", "richieste": []}),
+    )
+    client = APIClient()
+    client.force_authenticate(user=lavoro.utente)
+
+    resp = client.post(f"/api/lavori/{lavoro.id}/analizza/", {}, format="json")
+    assert resp.status_code == 409
+    assert resp.data["code"] == "analisi_parziale_da_confermare"
+
+    ok = client.post(
+        f"/api/lavori/{lavoro.id}/analizza/",
+        {"conferma_parziale": True},
+        format="json",
+    )
+    assert ok.status_code == 202
 
 
 def test_endpoint_analizza_e_bozza(lavoro, monkeypatch):
