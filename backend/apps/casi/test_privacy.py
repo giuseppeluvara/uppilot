@@ -209,7 +209,32 @@ def test_pseudonimizzazione_ripara_date_e_indirizzi_spezzati(db, django_user_mod
 
 def test_placeholder_malformed_riparato_e_marker_da_decidere_ammesso():
     mappa = {"[ORGANIZZAZIONE_1]": "Aurora Impianti S.r.l."}
-    testo = maschera_residui("[ORGANIZZAZIONIONE_1] chiede [DA DECIDERE].", mappa)
+    testo = maschera_residui(
+        "[ORGANIZZAZIONIONE_1] chiede [DA DECIDERE]. [organizzazione_1] resiste.",
+        mappa,
+    )
     assert "[ORGANIZZAZIONE_1]" in testo
+    assert "[organizzazione_1]" not in testo
     report = privacy_report(testo, mappa)
     assert report["malformed_placeholders"] == []
+
+
+def test_privacy_report_extra_values_ignora_titoli_descrittivi():
+    report = privacy_report(
+        "La bozza tratta appalto, penale e truffa come categorie giuridiche.",
+        {},
+        extra_values=[
+            "UPP AUDIT 2026-06-28 - Civile appalto complesso",
+            "UPP AUDIT 2026-06-28 - Penale appropriazione/truffa",
+        ],
+    )
+    assert report["leaks"] == []
+
+
+def test_privacy_report_extra_values_controlla_nomi_in_titolo():
+    report = privacy_report(
+        "La bozza cita Rossi e Bianchi senza placeholder.",
+        {},
+        extra_values=["Rossi c. Bianchi"],
+    )
+    assert {leak["token"] for leak in report["leaks"]} == {"rossi", "bianchi"}

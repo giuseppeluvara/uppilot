@@ -41,12 +41,16 @@ _STOP_TOKENS = {
     "alle",
     "allo",
     "art",
+    "appalto",
     "atto",
     "atti",
+    "audit",
     "avv",
+    "causa",
     "civile",
     "cod",
     "codice",
+    "complesso",
     "comparsa",
     "conclusionale",
     "condominio",
@@ -75,6 +79,7 @@ _STOP_TOKENS = {
     "novembre",
     "dicembre",
     "pec",
+    "penale",
     "presso",
     "registro",
     "ricorso",
@@ -85,6 +90,7 @@ _STOP_TOKENS = {
     "srl",
     "spa",
     "tribunale",
+    "truffa",
     "ufficio",
     "via",
     "viale",
@@ -146,6 +152,32 @@ def token_significativi(valore: str) -> list[str]:
     return out
 
 
+_CAPITALIZED_TOKEN_RE = re.compile(r"\b[A-ZÀ-Ö][\wÀ-ÖØ-öø-ÿ']{3,}\b", re.UNICODE)
+
+
+def token_extra_significativi(valore: str) -> list[str]:
+    """Token da controllare per valori extra come il titolo del lavoro.
+
+    I titoli spesso contengono parole descrittive ("appalto", "penale") che non
+    sono dati personali. Qui manteniamo il controllo sui nomi propri/enti e sui
+    codici, evitando falsi positivi su categorie del fascicolo.
+    """
+
+    valore = valore or ""
+    if _SUFFIX_RE.search(valore):
+        return token_significativi(valore)
+    out: list[str] = []
+    for token in _CAPITALIZED_TOKEN_RE.findall(valore):
+        norm = normalizza_entita(token)
+        if len(norm) < 4 or norm in _STOP_TOKENS or norm.isdecimal():
+            continue
+        if norm not in out:
+            out.append(norm)
+    # Una sola parola maiuscola nel titolo è spesso categoria o iniziale frase;
+    # due o più token sono invece un buon indizio di parti/enti nel titolo.
+    return out if len(out) >= 2 else []
+
+
 def normalizza_spazi_placeholder(testo: str) -> str:
     """Evita placeholder incollati a parole o punteggiatura dopo la sostituzione."""
     if not testo:
@@ -189,10 +221,11 @@ def ripara_placeholder_malformed(testo: str, mappa: dict[str, str]) -> str:
         token = match.group(0)
         if _placeholder_valido(token, mappa):
             return token
-        m = re.fullmatch(r"\[([A-Z_]+)_(\d+)\]", token)
+        m = re.fullmatch(r"\[([A-Za-z_]+)_(\d+)\]", token)
         if not m:
             return token
         gruppo, indice = m.groups()
+        gruppo = gruppo.upper()
         candidati = [ph for ph in validi if ph.endswith(f"_{indice}]")]
         if not candidati:
             return token
@@ -322,11 +355,12 @@ def privacy_report(
         corpo = "\n".join(t for t in testi if t)
     leaks: list[dict[str, str]] = []
     visti: set[tuple[str, str]] = set()
-    valori = list((mappa or {}).items())
-    valori.extend((f"extra:{i}", v) for i, v in enumerate(extra_values) if v)
+    valori = [(placeholder, reale, False) for placeholder, reale in (mappa or {}).items()]
+    valori.extend((f"extra:{i}", v, True) for i, v in enumerate(extra_values) if v)
 
-    for placeholder, reale in valori:
-        for token in token_significativi(reale or ""):
+    for placeholder, reale, extra in valori:
+        tokens = token_extra_significativi(reale or "") if extra else token_significativi(reale or "")
+        for token in tokens:
             if re.search(rf"(?<![\w\[]){re.escape(token)}(?![\w\]])", corpo, re.IGNORECASE):
                 key = (placeholder, token)
                 if key not in visti:

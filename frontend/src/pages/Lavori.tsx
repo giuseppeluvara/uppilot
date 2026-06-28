@@ -1,12 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ChevronRight, FolderOpen, Plus, Search } from "lucide-react";
-import { api } from "@/api";
+import { ChevronRight, FolderOpen, Plus, Search, Trash2 } from "lucide-react";
+import { api, ApiError } from "@/api";
 import type { Lavoro } from "@/types";
 import { statoLavoro } from "@/lib/stato";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -24,6 +33,8 @@ export function Lavori() {
   const [titolo, setTitolo] = useState("");
   const [filtro, setFiltro] = useState("");
   const [caricamento, setCaricamento] = useState(true);
+  const [lavoroDaEliminare, setLavoroDaEliminare] = useState<Lavoro | null>(null);
+  const [eliminazione, setEliminazione] = useState(false);
   const cercaRef = useRef<HTMLInputElement>(null);
 
   async function ricarica() {
@@ -61,6 +72,21 @@ export function Lavori() {
     const l = await api.post<Lavoro>("/lavori/", { titolo });
     setTitolo("");
     apri(l.id);
+  }
+
+  async function eliminaConfermato() {
+    if (!lavoroDaEliminare) return;
+    setEliminazione(true);
+    try {
+      await api.del(`/lavori/${lavoroDaEliminare.id}/`);
+      setLavori((correnti) => correnti.filter((l) => l.id !== lavoroDaEliminare.id));
+      toast.success("Lavoro eliminato");
+      setLavoroDaEliminare(null);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Eliminazione non riuscita.");
+    } finally {
+      setEliminazione(false);
+    }
   }
 
   return (
@@ -125,7 +151,7 @@ export function Lavori() {
                     <TableHead>Titolo</TableHead>
                     <TableHead>Stato</TableHead>
                     <TableHead>Aggiornato</TableHead>
-                    <TableHead className="w-0" />
+                    <TableHead className="w-0">Azioni</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -152,7 +178,20 @@ export function Lavori() {
                           {new Date(l.updated_at).toLocaleString("it-IT")}
                         </TableCell>
                         <TableCell className="text-right">
-                          <ChevronRight className="size-4 text-muted-foreground" />
+                          <div className="flex items-center justify-end gap-1">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              aria-label={`Elimina ${l.titolo}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setLavoroDaEliminare(l);
+                              }}
+                            >
+                              <Trash2 />
+                            </Button>
+                            <ChevronRight className="size-4 text-muted-foreground" />
+                          </div>
                         </TableCell>
                       </TableRow>
                     );
@@ -163,6 +202,26 @@ export function Lavori() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={lavoroDaEliminare !== null} onOpenChange={(o) => !o && setLavoroDaEliminare(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Eliminare il lavoro?</DialogTitle>
+            <DialogDescription>
+              “{lavoroDaEliminare?.titolo}” e tutti i documenti collegati verranno rimossi definitivamente.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setLavoroDaEliminare(null)} disabled={eliminazione}>
+              Annulla
+            </Button>
+            <Button variant="destructive" onClick={eliminaConfermato} disabled={eliminazione}>
+              <Trash2 />
+              {eliminazione ? "Eliminazione…" : "Elimina"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
