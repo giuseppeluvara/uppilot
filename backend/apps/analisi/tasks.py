@@ -445,6 +445,104 @@ def approfondisci_lavoro_task(lavoro_id: int, commerciale: bool = False) -> None
 
 
 @shared_task
+def approfondisci_richiesta_task(richiesta_id: int, commerciale: bool = False) -> None:
+    """Ricalcola una singola richiesta senza rilanciare l'intero fascicolo."""
+    richiesta = Richiesta.objects.select_related("lavoro").get(pk=richiesta_id)
+    lavoro = richiesta.lavoro
+    lavoro.approfondimento_stato = Lavoro.StatoAnalisi.IN_CORSO
+    lavoro.approfondimento_errore = ""
+    lavoro.approfondimento_progresso = {
+        "fase": "richiesta_singola",
+        "corrente": 0,
+        "totale": 1,
+        "percentuale": 0,
+        "messaggio": f"Ricalcolo richiesta {richiesta.ordine + 1}",
+        "aggiornato_at": timezone.now().isoformat(),
+    }
+    lavoro.save(
+        update_fields=[
+            "approfondimento_stato",
+            "approfondimento_errore",
+            "approfondimento_progresso",
+        ]
+    )
+    documenti = list(documenti_utilizzabili(lavoro))
+    try:
+        riferimenti = _riferimenti_corpus(lavoro, richiesta.testo)
+        dati = approfondisci_richiesta(
+            richiesta, documenti, get_llm_backend(commerciale), riferimenti
+        )
+        richiesta.onere_probatorio = _sanifica_lavoro(lavoro, dati["onere_probatorio"])
+        richiesta.motivazione = _sanifica_lavoro(lavoro, dati["motivazione"])
+        richiesta.non_contestazioni = _sanifica_lista(lavoro, dati["non_contestazioni"])
+        richiesta.quesiti_aperti = _sanifica_lista(lavoro, dati["quesiti_aperti"])
+        flags = list(richiesta.flags or [])
+        flags.extend(
+            _avvisi_coerenza_numerica(
+                richiesta,
+                richiesta.onere_probatorio,
+                richiesta.motivazione,
+                "\n".join(richiesta.non_contestazioni or []),
+                "\n".join(richiesta.quesiti_aperti or []),
+            )
+        )
+        richiesta.fonti_tracciate = dati.get("fonti_tracciate", [])
+        richiesta.flags = list(dict.fromkeys(flags))
+        richiesta.stato = Richiesta.Stato.APPROFONDITA
+        richiesta.save(
+            update_fields=[
+                "onere_probatorio",
+                "motivazione",
+                "fonti_tracciate",
+                "non_contestazioni",
+                "quesiti_aperti",
+                "flags",
+                "stato",
+            ]
+        )
+        richiesta.allegati_collegati.set(dati["allegati"])
+        bozza, _ = Bozza.objects.get_or_create(lavoro=lavoro)
+        richieste_aggiornate = list(
+            lavoro.richieste.prefetch_related("allegati_collegati").all()
+        )
+        bozza.contenuto_per_richiesta = _contenuto_per_richiesta(richieste_aggiornate)
+        bozza.versione += 1
+        bozza.save(update_fields=["contenuto_per_richiesta", "versione", "updated_at"])
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Approfondimento singolo fallito per richiesta %s", richiesta_id)
+        messaggio = _errore_operativo(exc)
+        lavoro.approfondimento_stato = Lavoro.StatoAnalisi.ERRORE
+        lavoro.approfondimento_errore = messaggio
+        lavoro.approfondimento_progresso = {
+            "fase": "errore",
+            "corrente": 0,
+            "totale": 1,
+            "percentuale": 0,
+            "messaggio": messaggio,
+            "aggiornato_at": timezone.now().isoformat(),
+        }
+        lavoro.save(
+            update_fields=[
+                "approfondimento_stato",
+                "approfondimento_errore",
+                "approfondimento_progresso",
+            ]
+        )
+        return
+
+    lavoro.approfondimento_stato = Lavoro.StatoAnalisi.COMPLETATA
+    lavoro.approfondimento_progresso = {
+        "fase": "completata",
+        "corrente": 1,
+        "totale": 1,
+        "percentuale": 100,
+        "messaggio": "Richiesta ricalcolata",
+        "aggiornato_at": timezone.now().isoformat(),
+    }
+    lavoro.save(update_fields=["approfondimento_stato", "approfondimento_progresso"])
+
+
+@shared_task
 def ricerca_spunti_task(lavoro_id: int, commerciale: bool = False) -> None:
     """Ricerca giuridica 'spunti' via web search (§6). Query pseudonimizzata (§134)."""
     lavoro = Lavoro.objects.get(pk=lavoro_id)

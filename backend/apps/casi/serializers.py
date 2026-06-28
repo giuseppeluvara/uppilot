@@ -24,6 +24,8 @@ class DocumentoSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "file",
+            "nome_logico",
+            "ordine",
             "tipo_rilevato",
             "stato_estrazione",
             "errore_estrazione",
@@ -184,6 +186,9 @@ class LavoroSerializer(serializers.ModelSerializer):
             "ricerca_errore",
             "ricerca_progresso",
             "modello_testo",
+            "assegnato_a",
+            "revisore",
+            "stato_revisione",
             "sezioni",
             "documenti_statistiche",
             "checklist",

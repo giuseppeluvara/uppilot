@@ -140,6 +140,9 @@ class EventoDecisionale(models.Model):
         MATRICE_AGGIORNATA = "matrice_aggiornata", "Matrice aggiornata"
         MOTIVAZIONE_AGGIORNATA = "motivazione_aggiornata", "Motivazione aggiornata"
         BOZZA_AGGIORNATA = "bozza_aggiornata", "Bozza aggiornata"
+        COMMENTO_EDITOR = "commento_editor", "Commento editor"
+        FONTE_AGGIORNATA = "fonte_aggiornata", "Fonte aggiornata"
+        AZIONE_LACUNA = "azione_lacuna", "Azione su lacuna"
         AUDIT_ESPORTATO = "audit_esportato", "Audit esportato"
         RED_TEAM_ESEGUITO = "red_team_eseguito", "Red team eseguito"
 
@@ -179,6 +182,43 @@ class EventoDecisionale(models.Model):
 
     def __str__(self) -> str:
         return f"{self.get_tipo_display()} - lavoro {self.lavoro_id}"
+
+
+class CommentoEditor(models.Model):
+    """Commento operativo sulla bozza o su una sezione redazionale."""
+
+    class Sezione(models.TextChoices):
+        IN_FATTO = "in_fatto", "In fatto"
+        IN_DIRITTO = "in_diritto", "In diritto"
+        PQM = "pqm", "P.Q.M."
+        FONTE = "fonte", "Fonte"
+        PRIVACY = "privacy", "Privacy"
+        GENERALE = "generale", "Generale"
+
+    lavoro = models.ForeignKey(
+        Lavoro, on_delete=models.CASCADE, related_name="commenti_editor"
+    )
+    utente = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="commenti_editor",
+    )
+    sezione = models.CharField(
+        max_length=24, choices=Sezione.choices, default=Sezione.GENERALE
+    )
+    riferimento_id = models.PositiveIntegerField(null=True, blank=True)
+    testo = models.TextField()
+    risolto = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+    def __str__(self) -> str:
+        return f"Commento {self.sezione} - lavoro {self.lavoro_id}"
 
 
 class SpuntoRicerca(models.Model):

@@ -32,11 +32,14 @@ import type {
   PrivacyReport,
   ProgressoTask,
   RedTeamReport,
+  RevisioneFascicolo,
   Richiesta,
   Sezione,
   StatoContraddittorio,
   StatoProva,
   Spunto,
+  CommentoEditor,
+  TemplateProvvedimento,
 } from "@/types";
 import { statoLavoro } from "@/lib/stato";
 import { cn } from "@/lib/utils";
@@ -123,6 +126,8 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
   const [matrice, setMatrice] = useState<FattoProcessuale[]>([]);
   const [eventi, setEventi] = useState<EventoDecisionale[]>([]);
   const [redTeam, setRedTeam] = useState<RedTeamReport | null>(null);
+  const [revisione, setRevisione] = useState<RevisioneFascicolo | null>(null);
+  const [commenti, setCommenti] = useState<CommentoEditor[]>([]);
   const [spunti, setSpunti] = useState<Spunto[]>([]);
   const [commerciale, setCommerciale] = useState(false);
   const [pending, setPending] = useState<Pending>({});
@@ -134,6 +139,8 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
       const l = await api.get<Lavoro>(`/lavori/${id}/`);
       setLavoro(l);
       setSpunti(await api.get<Spunto[]>(`/lavori/${id}/spunti/`));
+      setRevisione(await api.get<RevisioneFascicolo>(`/lavori/${id}/revisione/`));
+      setCommenti(await api.get<CommentoEditor[]>(`/lavori/${id}/commenti/`));
       if (l.analisi_stato === "completata") {
         setRichieste(await api.get<Richiesta[]>(`/lavori/${id}/richieste/`));
         setMatrice(await api.get<FattoProcessuale[]>(`/lavori/${id}/matrice/`));
@@ -340,6 +347,7 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
     await azione(async () => {
       const report = await api.post<RedTeamReport>(`/lavori/${id}/red-team/`);
       setRedTeam(report);
+      setRevisione(await api.get<RevisioneFascicolo>(`/lavori/${id}/revisione/`));
       setEventi(await api.get<EventoDecisionale[]>(`/lavori/${id}/eventi/`));
     }, "Red team completato");
   }
@@ -350,6 +358,60 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
       "Audit scaricato",
     );
     setEventi(await api.get<EventoDecisionale[]>(`/lavori/${id}/eventi/`));
+  }
+
+  async function applicaAzioneLacuna(payload: Record<string, unknown>) {
+    await azione(async () => {
+      setRevisione(await api.post<RevisioneFascicolo>(`/lavori/${id}/azioni/`, payload));
+      setMatrice(await api.get<FattoProcessuale[]>(`/lavori/${id}/matrice/`));
+      setCommenti(await api.get<CommentoEditor[]>(`/lavori/${id}/commenti/`));
+      setEventi(await api.get<EventoDecisionale[]>(`/lavori/${id}/eventi/`));
+    }, "Azione applicata");
+  }
+
+  async function valutaFonte(richiestaId: number, anchor: string, valutazione: string) {
+    await azione(async () => {
+      await api.patch<Richiesta>(`/richieste/${richiestaId}/fonti/`, {
+        anchor,
+        valutazione_operatore: valutazione,
+      });
+      setRichieste(await api.get<Richiesta[]>(`/lavori/${id}/richieste/`));
+      setMatrice(await api.get<FattoProcessuale[]>(`/lavori/${id}/matrice/`));
+      setRevisione(await api.get<RevisioneFascicolo>(`/lavori/${id}/revisione/`));
+    }, "Fonte aggiornata");
+  }
+
+  async function aggiungiCommento(payload: Partial<CommentoEditor>) {
+    await azione(async () => {
+      const commento = await api.post<CommentoEditor>(`/lavori/${id}/commenti/`, payload);
+      setCommenti((correnti) => [commento, ...correnti]);
+    }, "Commento aggiunto");
+  }
+
+  async function aggiornaCommento(commentoId: number, payload: Partial<CommentoEditor>) {
+    await azione(async () => {
+      const commento = await api.patch<CommentoEditor>(`/commenti/${commentoId}/`, payload);
+      setCommenti((correnti) => correnti.map((c) => (c.id === commento.id ? commento : c)));
+    }, "Commento aggiornato");
+  }
+
+  async function applicaTemplate(template: TemplateProvvedimento) {
+    await azione(async () => {
+      setLavoro(await api.post<Lavoro>(`/lavori/${id}/template/`, { template_id: template.id }));
+    }, "Template applicato");
+  }
+
+  async function aggiornaCollaborazione(payload: Record<string, unknown>) {
+    await azione(async () => {
+      setLavoro(await api.patch<Lavoro>(`/lavori/${id}/collaborazione/`, payload));
+    }, "Stato fascicolo aggiornato");
+  }
+
+  async function aggiornaDocumentoMetadata(idDocumento: number, payload: Record<string, unknown>) {
+    await azione(
+      () => api.patch(`/documenti/${idDocumento}/metadata/`, payload),
+      "Metadati documento salvati",
+    );
   }
 
   return (
@@ -366,6 +428,30 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
 
       <WorkflowCard lavoro={lavoro} richieste={richieste} />
       <PrivacyReportAlert report={lavoro.privacy_report} />
+      {revisione && (
+        <>
+          <DashboardFascicoloCard revisione={revisione} />
+          <CollaborazioneCard lavoro={lavoro} onAggiorna={aggiornaCollaborazione} />
+          <RevisioneGuidataCard revisione={revisione} onAzione={applicaAzioneLacuna} />
+          <QualitaAiCard revisione={revisione} />
+          <TemplateBackupCard
+            templateDisponibili={revisione.template_disponibili}
+            onApplicaTemplate={applicaTemplate}
+            onBackup={() =>
+              azione(
+                () => api.download(`/lavori/${id}/backup/`, `uppilot_backup_${id}.json`),
+                "Backup scaricato",
+              )
+            }
+          />
+          <CommentiEditorCard
+            commenti={commenti}
+            eventi={eventi}
+            onAggiungi={aggiungiCommento}
+            onAggiorna={aggiornaCommento}
+          />
+        </>
+      )}
 
       <section className="grid gap-4">
         <div className="flex items-center justify-between">
@@ -399,6 +485,7 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
             onRiprova={(d) =>
               azione(() => api.post(`/documenti/${d}/ripseudonimizza/`), "Anonimizzazione riavviata")
             }
+            onMetadata={aggiornaDocumentoMetadata}
             onElimina={(d) => setDocumentoDaEliminare({ id: d, nome: nomiAllegati[d] ?? `documento ${d}` })}
           />
         ))}
@@ -462,7 +549,10 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
           righe={matrice}
           eventi={eventi}
           redTeam={redTeam}
+          revisione={revisione}
           onAggiorna={aggiornaFattoMatrice}
+          onAzione={applicaAzioneLacuna}
+          onValutaFonte={valutaFonte}
           onRedTeam={eseguiRedTeam}
           onAudit={scaricaAudit}
         />
@@ -477,6 +567,13 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
           progresso={lavoro.approfondimento_progresso}
           onApprofondisci={() =>
             avvia("approf", () => api.post(`/lavori/${id}/approfondisci/`, { commerciale }), "Approfondimento avviato")
+          }
+          onApprofondisciSingola={(rid) =>
+            avvia(
+              "approf",
+              () => api.post(`/richieste/${rid}/approfondisci/`, { commerciale }),
+              "Ricalcolo richiesta avviato",
+            )
           }
           onInterrompi={() => annulla("approf", "approfondimento")}
           onSalvaMotivazione={(rid, testo) =>
@@ -792,6 +889,337 @@ function WorkflowCard({ lavoro, richieste }: { lavoro: Lavoro; richieste: Richie
   );
 }
 
+function DashboardFascicoloCard({ revisione }: { revisione: RevisioneFascicolo }) {
+  const d = revisione.dashboard;
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between space-y-0">
+        <CardTitle className="text-base">Dashboard fascicolo</CardTitle>
+        <Badge variant={revisione.pronto_export ? "default" : "destructive"}>
+          {revisione.pronto_export ? "Pronto" : "Non pronto"}
+        </Badge>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        <p className="text-sm text-muted-foreground">{revisione.messaggio}</p>
+        <div className="grid gap-3 lg:grid-cols-3">
+          <div className="grid gap-2 rounded-md border p-3">
+            <p className="text-xs font-medium uppercase text-muted-foreground">Domande</p>
+            {d.domande.slice(0, 4).map((r) => (
+              <p key={r.id} className="text-sm leading-5">
+                <Badge variant="outline" className="mr-2 capitalize">{r.parte}</Badge>
+                {r.testo}
+              </p>
+            ))}
+          </div>
+          <div className="grid gap-2 rounded-md border p-3">
+            <p className="text-xs font-medium uppercase text-muted-foreground">Prove chiave</p>
+            {d.prove_chiave.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Nessuna fonte decisiva selezionata.</p>
+            ) : (
+              d.prove_chiave.slice(0, 4).map((f) => (
+                <p key={f.anchor} className="text-sm">
+                  <Badge variant={fonteVariant(f.affidabilita)} className="mr-2">
+                    {Math.round(f.score * 100)}%
+                  </Badge>
+                  {f.documento_nome}
+                </p>
+              ))
+            )}
+          </div>
+          <div className="grid gap-2 rounded-md border p-3">
+            <p className="text-xs font-medium uppercase text-muted-foreground">Punti critici</p>
+            {[...revisione.blocchi, ...revisione.avvisi].slice(0, 5).map((x) => (
+              <p key={x} className="text-sm leading-5">{x}</p>
+            ))}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function CollaborazioneCard({
+  lavoro,
+  onAggiorna,
+}: {
+  lavoro: Lavoro;
+  onAggiorna: (payload: Record<string, unknown>) => void;
+}) {
+  const statoLabel: Record<Lavoro["stato_revisione"], string> = {
+    da_rivedere: "Da rivedere",
+    in_revisione: "In revisione",
+    validato: "Validato",
+    esportato: "Esportato",
+  };
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between space-y-0">
+        <CardTitle className="text-base">Collaborazione</CardTitle>
+        <Badge variant={lavoro.stato_revisione === "validato" ? "default" : "outline"}>
+          {statoLabel[lavoro.stato_revisione]}
+        </Badge>
+      </CardHeader>
+      <CardContent className="flex flex-wrap items-center gap-2">
+        <Button size="sm" variant="outline" onClick={() => onAggiorna({ assegna_a_me: true })}>
+          Assegna a me
+        </Button>
+        <Button size="sm" variant="outline" onClick={() => onAggiorna({ revisore_a_me: true })}>
+          Revisore: me
+        </Button>
+        <select
+          value={lavoro.stato_revisione}
+          onChange={(e) => onAggiorna({ stato_revisione: e.target.value })}
+          className="h-9 rounded-md border bg-background px-3 text-sm"
+        >
+          {Object.entries(statoLabel).map(([value, label]) => (
+            <option key={value} value={value}>{label}</option>
+          ))}
+        </select>
+        <span className="text-sm text-muted-foreground">
+          Assegnato: {lavoro.assegnato_a ?? "nessuno"} · Revisore: {lavoro.revisore ?? "nessuno"}
+        </span>
+      </CardContent>
+    </Card>
+  );
+}
+
+function RevisioneGuidataCard({
+  revisione,
+  onAzione,
+}: {
+  revisione: RevisioneFascicolo;
+  onAzione: (payload: Record<string, unknown>) => void;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Revisione guidata prima dell'export</CardTitle>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          {revisione.checklist.map((item) => (
+            <div
+              key={item.id}
+              className={cn(
+                "flex items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm",
+                item.ok ? "border-primary/30 bg-primary/5" : "border-destructive/30 bg-destructive/5",
+              )}
+            >
+              <span>{item.label}</span>
+              {item.ok ? <CircleCheck className="size-4 text-primary" /> : <TriangleAlert className="size-4 text-destructive" />}
+            </div>
+          ))}
+        </div>
+
+        {revisione.blocchi.length > 0 && (
+          <Alert variant="destructive">
+            <TriangleAlert />
+            <AlertTitle>Non esportare ancora</AlertTitle>
+            <AlertDescription>{revisione.blocchi.join(" ")}</AlertDescription>
+          </Alert>
+        )}
+
+        {revisione.avvisi.length > 0 && (
+          <Alert>
+            <HelpCircle />
+            <AlertTitle>Da verificare</AlertTitle>
+            <AlertDescription>{revisione.avvisi.join(" ")}</AlertDescription>
+          </Alert>
+        )}
+
+        {revisione.azioni_lacune.length > 0 && (
+          <div className="grid gap-2">
+            <p className="text-sm font-medium">Azioni operative suggerite</p>
+            {revisione.azioni_lacune.slice(0, 8).map((a, i) => (
+              <div key={`${a.tipo}-${a.fatto_id}-${a.richiesta_id}-${i}`} className="flex flex-wrap items-center gap-2 rounded-md border p-2 text-sm">
+                <Badge variant={a.severita === "alta" ? "destructive" : "secondary"}>{a.severita}</Badge>
+                <span className="min-w-0 flex-1">{a.descrizione}</span>
+                <Button size="sm" variant="outline" onClick={() => onAzione(a as unknown as Record<string, unknown>)}>
+                  {a.label}
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function QualitaAiCard({ revisione }: { revisione: RevisioneFascicolo }) {
+  const q = revisione.qualita_ai;
+  const privacy = revisione.privacy_assistita;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Qualità AI, privacy e documenti</CardTitle>
+      </CardHeader>
+      <CardContent className="grid gap-4 lg:grid-cols-3">
+        <div className="grid gap-2 rounded-md border p-3">
+          <p className="text-xs font-medium uppercase text-muted-foreground">Scheda qualità</p>
+          <Badge variant={q.score >= 80 ? "default" : q.score >= 55 ? "secondary" : "destructive"} className="w-fit">
+            {q.score}/100
+          </Badge>
+          <p className="text-sm text-muted-foreground">
+            Copertura documenti {q.copertura_documenti_percentuale}% · {q.fonti_totali} fonti · {q.fonti_deboli} deboli · {q.fonti_assenti} assenti.
+          </p>
+          <p className="text-sm text-muted-foreground">
+            {q.richieste_confidenza_bassa} richieste dubbie · {q.quesiti_aperti} quesiti · {q.coerenze_da_rivedere} coerenze da rivedere.
+          </p>
+        </div>
+        <div className="grid gap-2 rounded-md border p-3">
+          <p className="text-xs font-medium uppercase text-muted-foreground">Privacy assistita</p>
+          <Badge variant={privacy.ok ? "default" : "destructive"} className="w-fit">
+            {privacy.ok ? "Pulita" : `${privacy.report.warnings} warning`}
+          </Badge>
+          <p className="text-sm text-muted-foreground">{privacy.entita.length} entità in mappa.</p>
+          {privacy.placeholder_sospetti.length > 0 && (
+            <p className="text-sm text-destructive">Placeholder sospetti: {privacy.placeholder_sospetti.slice(0, 3).join(", ")}</p>
+          )}
+        </div>
+        <div className="grid gap-2 rounded-md border p-3">
+          <p className="text-xs font-medium uppercase text-muted-foreground">Workflow documentale</p>
+          <p className="text-sm text-muted-foreground">
+            {revisione.documenti_workflow.accettati}/{revisione.documenti_workflow.totali} documenti accettati.
+          </p>
+          {revisione.documenti_workflow.duplicati_sospetti.length > 0 ? (
+            <p className="text-sm text-destructive">
+              {revisione.documenti_workflow.duplicati_sospetti.length} duplicati sospetti.
+            </p>
+          ) : (
+            <p className="text-sm text-muted-foreground">Nessun duplicato per nome rilevato.</p>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function TemplateBackupCard({
+  templateDisponibili,
+  onApplicaTemplate,
+  onBackup,
+}: {
+  templateDisponibili: TemplateProvvedimento[];
+  onApplicaTemplate: (template: TemplateProvvedimento) => void;
+  onBackup: () => void;
+}) {
+  const [templateId, setTemplateId] = useState(templateDisponibili[0]?.id ?? "");
+  const selezionato = templateDisponibili.find((t) => t.id === templateId);
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between space-y-0">
+        <CardTitle className="text-base">Template e portabilità</CardTitle>
+        <Button variant="outline" size="sm" onClick={onBackup}>
+          <Download />
+          Backup
+        </Button>
+      </CardHeader>
+      <CardContent className="grid gap-3">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <select
+            value={templateId}
+            onChange={(e) => setTemplateId(e.target.value)}
+            className="h-9 rounded-md border bg-background px-3 text-sm"
+          >
+            {templateDisponibili.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+          <Button size="sm" variant="outline" disabled={!selezionato} onClick={() => selezionato && onApplicaTemplate(selezionato)}>
+            Applica template
+          </Button>
+        </div>
+        {selezionato && <p className="text-sm text-muted-foreground">{selezionato.testo}</p>}
+      </CardContent>
+    </Card>
+  );
+}
+
+function CommentiEditorCard({
+  commenti,
+  eventi,
+  onAggiungi,
+  onAggiorna,
+}: {
+  commenti: CommentoEditor[];
+  eventi: EventoDecisionale[];
+  onAggiungi: (payload: Partial<CommentoEditor>) => void;
+  onAggiorna: (id: number, payload: Partial<CommentoEditor>) => void;
+}) {
+  const [testo, setTesto] = useState("");
+  const [sezione, setSezione] = useState<CommentoEditor["sezione"]>("generale");
+  const aperti = commenti.filter((c) => !c.risolto);
+  const eventiEditor = eventi.filter((e) => ["bozza_aggiornata", "motivazione_aggiornata"].includes(e.tipo)).slice(0, 3);
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Commenti editor e cronologia operativa</CardTitle>
+      </CardHeader>
+      <CardContent className="grid gap-3">
+        <div className="grid gap-2 md:grid-cols-[12rem_minmax(0,1fr)_auto]">
+          <select value={sezione} onChange={(e) => setSezione(e.target.value as CommentoEditor["sezione"])} className="h-9 rounded-md border bg-background px-3 text-sm">
+            <option value="generale">Generale</option>
+            <option value="in_fatto">In fatto</option>
+            <option value="in_diritto">In diritto</option>
+            <option value="pqm">P.Q.M.</option>
+            <option value="fonte">Fonte</option>
+            <option value="privacy">Privacy</option>
+          </select>
+          <Input value={testo} onChange={(e) => setTesto(e.target.value)} placeholder="Aggiungi commento operativo…" />
+          <Button
+            size="sm"
+            disabled={!testo.trim()}
+            onClick={() => {
+              onAggiungi({ sezione, testo: testo.trim() });
+              setTesto("");
+            }}
+          >
+            Salva
+          </Button>
+        </div>
+        {aperti.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Nessun commento aperto.</p>
+        ) : (
+          <div className="grid gap-2">
+            {aperti.slice(0, 6).map((c) => (
+              <div key={c.id} className="flex flex-wrap items-center gap-2 rounded-md border p-2 text-sm">
+                <Badge variant="outline">{c.sezione_label}</Badge>
+                <span className="min-w-0 flex-1">{c.testo}</span>
+                <Button size="sm" variant="ghost" onClick={() => onAggiorna(c.id, { risolto: true })}>
+                  Risolto
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+        {eventiEditor.length > 0 && (
+          <div className="grid gap-2 border-t pt-3">
+            <p className="text-sm font-medium">Confronto ultime modifiche</p>
+            {eventiEditor.map((e) => (
+              <details key={e.id} className="rounded-md border px-3 py-2">
+                <summary className="cursor-pointer text-sm">
+                  {e.tipo_label} · {new Date(e.created_at).toLocaleString("it-IT")}
+                </summary>
+                <div className="mt-2 grid gap-2 md:grid-cols-2">
+                  <pre className="max-h-36 overflow-auto rounded-md bg-muted/40 p-2 whitespace-pre-wrap text-xs">
+                    {JSON.stringify(e.valore_precedente, null, 2)}
+                  </pre>
+                  <pre className="max-h-36 overflow-auto rounded-md bg-muted/40 p-2 whitespace-pre-wrap text-xs">
+                    {JSON.stringify(e.valore_nuovo, null, 2)}
+                  </pre>
+                </div>
+              </details>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function StatoOcr({ doc }: { doc: Documento }) {
   if (doc.stato_estrazione === "errore") return <Badge variant="destructive">Errore</Badge>;
   if (doc.stato_estrazione !== "completato")
@@ -811,6 +1239,7 @@ function SezioneCard({
   onVerifica,
   onSalvaPrivacy,
   onRiprova,
+  onMetadata,
   onElimina,
 }: {
   sezione: Sezione;
@@ -819,6 +1248,7 @@ function SezioneCard({
   onVerifica: (id: number) => void;
   onSalvaPrivacy: (id: number, payload: { testo_pseudonimizzato: string; mappa_entita: Record<string, string> }) => void;
   onRiprova: (id: number) => void;
+  onMetadata: (id: number, payload: Record<string, unknown>) => void;
   onElimina: (id: number) => void;
 }) {
   const [drag, setDrag] = useState(false);
@@ -920,6 +1350,7 @@ function SezioneCard({
                       Accettato
                     </Badge>
                   )}
+                  {d.nome_logico && <Badge variant="outline">{d.nome_logico}</Badge>}
                   <span className="grow" />
                   {d.stato_anonimizzazione === "errore" ? (
                     <>
@@ -950,12 +1381,51 @@ function SezioneCard({
                     )
                   )}
                 </div>
+                <DocumentoMetadataEditor doc={d} onSalva={onMetadata} />
               </div>
             ))}
           </div>
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function DocumentoMetadataEditor({
+  doc,
+  onSalva,
+}: {
+  doc: Documento;
+  onSalva: (id: number, payload: Record<string, unknown>) => void;
+}) {
+  const [nome, setNome] = useState(doc.nome_logico);
+  const [tipo, setTipo] = useState(doc.tipo_rilevato);
+  const [ordine, setOrdine] = useState(String(doc.ordine ?? 0));
+  useEffect(() => {
+    setNome(doc.nome_logico);
+    setTipo(doc.tipo_rilevato);
+    setOrdine(String(doc.ordine ?? 0));
+  }, [doc.id, doc.nome_logico, doc.tipo_rilevato, doc.ordine]);
+  const sporco = nome !== doc.nome_logico || tipo !== doc.tipo_rilevato || Number(ordine || 0) !== doc.ordine;
+  return (
+    <details className="mt-2 rounded-md bg-muted/20 px-3 py-2">
+      <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+        Metadati documento
+      </summary>
+      <div className="mt-2 grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_5rem_auto]">
+        <Input value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Nome logico" />
+        <Input value={tipo} onChange={(e) => setTipo(e.target.value)} placeholder="Classificazione" />
+        <Input value={ordine} onChange={(e) => setOrdine(e.target.value)} inputMode="numeric" />
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!sporco}
+          onClick={() => onSalva(doc.id, { nome_logico: nome, tipo_rilevato: tipo, ordine: Number(ordine || 0) })}
+        >
+          Salva
+        </Button>
+      </div>
+    </details>
   );
 }
 
@@ -1177,13 +1647,18 @@ function BozzaEditor({
   const [testo, setTesto] = useState(bozza.in_fatto);
   const [espanso, setEspanso] = useState(false);
   useEffect(() => setTesto(bozza.in_fatto), [bozza.in_fatto, bozza.versione]);
+  useEffect(() => {
+    if (testo === bozza.in_fatto) return;
+    const timer = window.setTimeout(() => onSalva(testo), 1800);
+    return () => window.clearTimeout(timer);
+  }, [testo, bozza.in_fatto, onSalva]);
 
   return (
     <Card>
       <CardHeader className="flex-row items-center justify-between space-y-0">
         <CardTitle>Bozza — In fatto</CardTitle>
         <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">versione {bozza.versione}</span>
+          <span className="text-xs text-muted-foreground">versione {bozza.versione} · autosave</span>
           <Button variant="ghost" size="icon-sm" onClick={() => setEspanso((v) => !v)} aria-label="Espandi editor">
             {espanso ? <Minimize2 /> : <Maximize2 />}
           </Button>
@@ -1252,6 +1727,11 @@ function MotivazioneEditor({
 function PqmEditor({ bozza, onSalva }: { bozza: Bozza; onSalva: (testo: string) => void }) {
   const [testo, setTesto] = useState(bozza.pqm);
   useEffect(() => setTesto(bozza.pqm), [bozza.pqm, bozza.versione]);
+  useEffect(() => {
+    if (testo === bozza.pqm) return;
+    const timer = window.setTimeout(() => onSalva(testo), 1800);
+    return () => window.clearTimeout(timer);
+  }, [testo, bozza.pqm, onSalva]);
   return (
     <Card>
       <CardHeader>
@@ -1373,14 +1853,20 @@ function MatriceFascicoloSection({
   righe,
   eventi,
   redTeam,
+  revisione,
   onAggiorna,
+  onAzione,
+  onValutaFonte,
   onRedTeam,
   onAudit,
 }: {
   righe: FattoProcessuale[];
   eventi: EventoDecisionale[];
   redTeam: RedTeamReport | null;
+  revisione: RevisioneFascicolo | null;
   onAggiorna: (idFatto: number, payload: Partial<FattoProcessuale>) => Promise<void>;
+  onAzione: (payload: Record<string, unknown>) => void;
+  onValutaFonte: (richiestaId: number, anchor: string, valutazione: string) => void;
   onRedTeam: () => void;
   onAudit: () => void;
 }) {
@@ -1440,6 +1926,20 @@ function MatriceFascicoloSection({
             ))}
           </div>
         )}
+        {revisione?.azioni_lacune && revisione.azioni_lacune.length > 0 && (
+          <div className="grid gap-2 rounded-md border p-3">
+            <p className="text-sm font-medium">Azioni su lacune probatorie</p>
+            {revisione.azioni_lacune.slice(0, 5).map((a, i) => (
+              <div key={`${a.tipo}-${i}`} className="flex flex-wrap items-center gap-2 text-sm">
+                <Badge variant={a.severita === "alta" ? "destructive" : "secondary"}>{a.severita}</Badge>
+                <span className="min-w-0 flex-1">{a.descrizione}</span>
+                <Button size="sm" variant="outline" onClick={() => onAzione(a as unknown as Record<string, unknown>)}>
+                  {a.label}
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
         {righe.length === 0 ? (
           <Alert>
             <HelpCircle />
@@ -1448,7 +1948,12 @@ function MatriceFascicoloSection({
           </Alert>
         ) : (
           righe.map((riga) => (
-            <MatriceFascicoloRow key={riga.id} riga={riga} onAggiorna={onAggiorna} />
+            <MatriceFascicoloRow
+              key={riga.id}
+              riga={riga}
+              onAggiorna={onAggiorna}
+              onValutaFonte={onValutaFonte}
+            />
           ))
         )}
         {eventi.length > 0 && (
@@ -1472,9 +1977,11 @@ function MatriceFascicoloSection({
 function MatriceFascicoloRow({
   riga,
   onAggiorna,
+  onValutaFonte,
 }: {
   riga: FattoProcessuale;
   onAggiorna: (idFatto: number, payload: Partial<FattoProcessuale>) => Promise<void>;
+  onValutaFonte: (richiestaId: number, anchor: string, valutazione: string) => void;
 }) {
   const [testo, setTesto] = useState(riga.testo);
   const [quesito, setQuesito] = useState(riga.quesito_umano);
@@ -1493,7 +2000,6 @@ function MatriceFascicoloRow({
     quesito !== riga.quesito_umano ||
     note !== riga.note_operatore ||
     noteContraddittorio !== riga.note_contraddittorio;
-  const fontiPrincipali = riga.fonti.slice(0, 3);
 
   return (
     <div className="grid gap-3 rounded-lg border p-3">
@@ -1587,28 +2093,11 @@ function MatriceFascicoloRow({
         </div>
       )}
 
-      {fontiPrincipali.length > 0 ? (
-        <div className="grid gap-2">
-          <div className="grid gap-2 md:grid-cols-3">
-            <FontiParteMini titolo="Attore" fonti={riga.fonti_attore} />
-            <FontiParteMini titolo="Convenuto" fonti={riga.fonti_convenuto} />
-            <FontiParteMini titolo="Generici" fonti={riga.fonti_generiche} />
-          </div>
-          {fontiPrincipali.map((fonte) => (
-            <details key={fonte.anchor} className="rounded-md bg-muted/30 px-3 py-2">
-              <summary className="cursor-pointer list-none">
-                <div className="flex flex-wrap items-center gap-2 text-sm">
-                  <Badge variant={fonteVariant(fonte.affidabilita)}>
-                    {Math.round(fonte.score * 100)}%
-                  </Badge>
-                  <span className="font-medium">{fonte.documento_nome}</span>
-                  <Badge variant="outline">{fonte.sezione_label}</Badge>
-                </div>
-              </summary>
-              <p className="mt-2 text-sm leading-6 text-muted-foreground">{fonte.snippet}</p>
-            </details>
-          ))}
-        </div>
+      {riga.fonti.length > 0 ? (
+        <FontiComparate
+          riga={riga}
+          onValutaFonte={(anchor, valutazione) => onValutaFonte(riga.richiesta_id, anchor, valutazione)}
+        />
       ) : (
         <Alert>
           <Search />
@@ -1662,6 +2151,83 @@ function MatriceFascicoloRow({
   );
 }
 
+function FontiComparate({
+  riga,
+  onValutaFonte,
+}: {
+  riga: FattoProcessuale;
+  onValutaFonte: (anchor: string, valutazione: string) => void;
+}) {
+  return (
+    <div className="grid gap-3">
+      <div className="grid gap-2 lg:grid-cols-3">
+        <FontiColonna titolo="Attore" fonti={riga.fonti_attore} onValutaFonte={onValutaFonte} />
+        <FontiColonna titolo="Convenuto" fonti={riga.fonti_convenuto} onValutaFonte={onValutaFonte} />
+        <FontiColonna titolo="Generici" fonti={riga.fonti_generiche} onValutaFonte={onValutaFonte} />
+      </div>
+      {riga.fonti_supporto.length > 0 && riga.fonti_controparte.length > 0 && (
+        <Alert>
+          <Scale />
+          <AlertTitle>Contraddittorio leggibile</AlertTitle>
+          <AlertDescription>
+            Sono presenti fonti di supporto e fonti della controparte: confronta gli snippet prima di fissare lo stato prova.
+          </AlertDescription>
+        </Alert>
+      )}
+    </div>
+  );
+}
+
+function FontiColonna({
+  titolo,
+  fonti,
+  onValutaFonte,
+}: {
+  titolo: string;
+  fonti: FattoProcessuale["fonti"];
+  onValutaFonte: (anchor: string, valutazione: string) => void;
+}) {
+  return (
+    <div className="grid content-start gap-2 rounded-md border bg-muted/10 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs font-medium uppercase text-muted-foreground">{titolo}</p>
+        <Badge variant="outline">{fonti.length}</Badge>
+      </div>
+      {fonti.length === 0 ? (
+        <p className="text-xs text-muted-foreground">Nessuna fonte</p>
+      ) : (
+        fonti.map((fonte) => (
+          <details key={fonte.anchor} className="rounded-md bg-background px-3 py-2">
+            <summary className="cursor-pointer list-none">
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <Badge variant={fonteVariant(fonte.affidabilita)}>
+                  {Math.round(fonte.score * 100)}%
+                </Badge>
+                <span className="font-medium">{fonte.documento_nome}</span>
+                {fonte.valutazione_label && <Badge variant="secondary">{fonte.valutazione_label}</Badge>}
+              </div>
+            </summary>
+            <div className="mt-2 grid gap-2">
+              <p className="text-sm leading-6 text-muted-foreground">{fonte.snippet}</p>
+              <div className="flex flex-wrap gap-1">
+                <Button size="sm" variant="outline" onClick={() => onValutaFonte(fonte.anchor, "decisiva")}>
+                  Decisiva
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => onValutaFonte(fonte.anchor, "da_verificare")}>
+                  Da verificare
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => onValutaFonte(fonte.anchor, "irrilevante")}>
+                  Irrilevante
+                </Button>
+              </div>
+            </div>
+          </details>
+        ))
+      )}
+    </div>
+  );
+}
+
 function FontiParteMini({ titolo, fonti }: { titolo: string; fonti: FattoProcessuale["fonti"] }) {
   return (
     <div className="rounded-md border bg-muted/20 px-3 py-2">
@@ -1691,6 +2257,7 @@ function RichiesteSection({
   inCorso,
   progresso,
   onApprofondisci,
+  onApprofondisciSingola,
   onInterrompi,
   onSalvaMotivazione,
 }: {
@@ -1700,6 +2267,7 @@ function RichiesteSection({
   inCorso: boolean;
   progresso?: ProgressoTask;
   onApprofondisci: () => void;
+  onApprofondisciSingola: (richiestaId: number) => void;
   onInterrompi: () => void;
   onSalvaMotivazione: (richiestaId: number, testo: string) => void;
 }) {
@@ -1788,6 +2356,13 @@ function RichiesteSection({
                 ))}
 
               <FontiTracciatePanel richiesta={r} />
+
+              <div className="flex justify-end">
+                <Button size="sm" variant="outline" disabled={inCorso} onClick={() => onApprofondisciSingola(r.id)}>
+                  {inCorso ? <Loader2 className="animate-spin" /> : <Play />}
+                  Ricalcola questa richiesta
+                </Button>
+              </div>
 
               <MotivazioneEditor richiesta={r} onSalva={onSalvaMotivazione} />
 
@@ -1909,9 +2484,11 @@ function RicercaCard({
                   >
                     {sp.fonte_label}
                   </Badge>
+                  <Badge variant="outline">{sp.tipo_fonte}</Badge>
                   <span className="text-sm font-medium">{sp.argomento || "Spunto"}</span>
                 </div>
                 <p className="mt-2 text-sm text-muted-foreground">{sp.sintesi}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{sp.motivazione_affidabilita}</p>
                 {sp.suggerimento && (
                   <p className="mt-1 text-sm">
                     <span className="font-medium">Suggerimento: </span>

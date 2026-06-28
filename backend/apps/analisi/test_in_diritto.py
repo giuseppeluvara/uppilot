@@ -357,6 +357,113 @@ def test_red_team_segnala_incoerenze_e_logga_evento(scenario):
     ).exists()
 
 
+def test_revisione_guidata_e_azioni_lacune(scenario):
+    lavoro, _, richiesta = scenario
+    bozza = Bozza.objects.create(lavoro=lavoro, in_fatto="Fatto.", pqm="")
+    fatto = FattoProcessuale.objects.create(
+        richiesta=richiesta,
+        testo="Fatto senza fonte decisiva",
+        stato_prova=FattoProcessuale.StatoProva.DA_VERIFICARE,
+    )
+    client = APIClient()
+    client.force_authenticate(user=lavoro.utente)
+
+    report = client.get(f"/api/lavori/{lavoro.id}/revisione/")
+
+    assert report.status_code == 200
+    data = report.json()
+    assert data["pronto_export"] is False
+    assert data["checklist"]
+    assert "fonti_totali" in data["qualita_ai"]
+    assert data["azioni_lacune"]
+
+    azione = client.post(
+        f"/api/lavori/{lavoro.id}/azioni/",
+        {"tipo": "segna_insufficiente", "fatto_id": fatto.id},
+        format="json",
+    )
+
+    assert azione.status_code == 200
+    fatto.refresh_from_db()
+    assert fatto.stato_prova == FattoProcessuale.StatoProva.INSUFFICIENTE
+    assert EventoDecisionale.objects.filter(
+        lavoro=lavoro, tipo=EventoDecisionale.Tipo.AZIONE_LACUNA
+    ).exists()
+
+
+def test_marcatura_fonte_e_commenti_editor(scenario):
+    lavoro, doc, richiesta = scenario
+    richiesta.fonti_tracciate = [
+        {
+            "documento_id": doc.id,
+            "documento_nome": "x.pdf",
+            "documento_url": "/media/x.pdf",
+            "sezione": "attore",
+            "sezione_label": "Fascicolo dell'attore",
+            "score": 0.82,
+            "affidabilita": "alta",
+            "affidabilita_label": "Riscontro forte",
+            "termini": ["contratto"],
+            "numeri": [],
+            "motivi": ["test"],
+            "snippet": "produce il contratto",
+            "posizione": 0,
+            "anchor": "doc-x-0",
+        }
+    ]
+    richiesta.save(update_fields=["fonti_tracciate"])
+    client = APIClient()
+    client.force_authenticate(user=lavoro.utente)
+
+    fonte = client.patch(
+        f"/api/richieste/{richiesta.id}/fonti/",
+        {"anchor": "doc-x-0", "valutazione_operatore": "decisiva"},
+        format="json",
+    )
+    assert fonte.status_code == 200
+    richiesta.refresh_from_db()
+    assert richiesta.fonti_tracciate[0]["valutazione_operatore"] == "decisiva"
+
+    commento = client.post(
+        f"/api/lavori/{lavoro.id}/commenti/",
+        {"sezione": "in_diritto", "testo": "Verificare passaggio motivazionale."},
+        format="json",
+    )
+    assert commento.status_code == 201
+    patch = client.patch(
+        f"/api/commenti/{commento.json()['id']}/",
+        {"risolto": True},
+        format="json",
+    )
+    assert patch.status_code == 200
+    assert patch.json()["risolto"] is True
+    assert EventoDecisionale.objects.filter(
+        lavoro=lavoro, tipo=EventoDecisionale.Tipo.COMMENTO_EDITOR
+    ).exists()
+
+
+def test_approfondisci_richiesta_singola_endpoint(scenario, monkeypatch):
+    lavoro, _, richiesta = scenario
+    chiamate = []
+
+    class FakeDelay:
+        id = "task-singolo"
+
+    monkeypatch.setattr(
+        "apps.analisi.views.approfondisci_richiesta_task.delay",
+        lambda rid, commerciale=False: chiamate.append((rid, commerciale)) or FakeDelay(),
+    )
+    client = APIClient()
+    client.force_authenticate(user=lavoro.utente)
+
+    resp = client.post(f"/api/richieste/{richiesta.id}/approfondisci/", {"commerciale": False}, format="json")
+
+    assert resp.status_code == 202
+    assert chiamate == [(richiesta.id, False)]
+    lavoro.refresh_from_db()
+    assert lavoro.approfondimento_task_id == "task-singolo"
+
+
 def test_eventi_api_e_audit_export(scenario):
     lavoro, _, richiesta = scenario
     evento = EventoDecisionale.objects.create(

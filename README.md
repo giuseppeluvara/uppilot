@@ -169,9 +169,14 @@ controllo privacy deterministico su residui noti, candidati PII sconosciuti e pl
 malformati prima di revisione/export; revisione manuale del testo pseudonimizzato e della mappa;
 blocco server-side dell'export pseudonimizzato se il report privacy non è pulito salvo override;
 export `.docx` pseudonimizzato senza titolo reale o nomi file identificativi, più versione "in chiaro"
-con avviso; estrazione richieste robusta (due chiamate LLM focalizzate + schema vincolante);
+con avviso; revisione guidata pre-export con dashboard fascicolo, checklist UPP, qualità AI,
+privacy assistita, red-team e azioni operative sulle lacune; vista comparativa delle fonti per
+attore/convenuto/generici con marcatura decisiva/irrilevante/da verificare; editor con autosave,
+commenti operativi, cronologia eventi, template di provvedimento e backup/import portabile del
+fascicolo; modalità demo civile/penale per formazione e test ripetibili; estrazione richieste robusta
+(due chiamate LLM focalizzate + schema vincolante);
 fasi asincrone protette da doppio avvio, interrompibili dalla UI e con progresso persistente
-(analisi, approfondimento, ricerca, grafo); analisi parziale possibile solo con conferma esplicita;
+(analisi, approfondimento, singola richiesta, ricerca, grafo); analisi parziale possibile solo con conferma esplicita;
 editor completo (motivazione "in diritto" + P.Q.M.) con layout mobile più gestibile; anteprima
 documenti; ricerca nell'archivio; corpus con upload file, categorie, soglia di rilevanza e permessi
 di visibilità/eliminazione; ricerca giuridica con etichette di affidabilità fonte e stato
@@ -182,7 +187,7 @@ e caricamento lazy delle schermate frontend.
 ## Stato
 
 **M1 + M2 completi**, validati end-to-end (anche su un fascicolo d'appalto reale). Ultima verifica
-locale: **85 test backend verdi**, build frontend Vite riuscita, migrazioni allineate, servizi Docker
+locale: **116 test backend verdi**, build frontend Vite riuscita, migrazioni allineate, servizi Docker
 healthy e `manage.py check` senza issue. Per l'uso operativo passo per passo vedi la
 **[Guida operativa](GUIDA.md)**.
 

@@ -3,7 +3,14 @@ import re
 from rest_framework import serializers
 from urllib.parse import urlparse
 
-from .models import Bozza, EventoDecisionale, FattoProcessuale, Richiesta, SpuntoRicerca
+from .models import (
+    Bozza,
+    CommentoEditor,
+    EventoDecisionale,
+    FattoProcessuale,
+    Richiesta,
+    SpuntoRicerca,
+)
 from .services import documenti_utilizzabili, traccia_fonti_richiesta
 
 
@@ -38,6 +45,21 @@ def _qualifica_fonte(url: str) -> tuple[str, str]:
     if "studio" in host or "blog" in host:
         return "bassa", "Fonte da verificare con cautela"
     return "media", "Fonte da verificare"
+
+
+def _tipo_fonte_giuridica(spunto: SpuntoRicerca) -> str:
+    testo = f"{spunto.argomento} {spunto.sintesi} {spunto.fonte}".casefold()
+    if any(x in testo for x in ("normattiva", "gazzettaufficiale", "art.", "codice", "d.lgs", "legge")):
+        return "norma"
+    if any(x in testo for x in ("cassazione", "tribunale", "corte", "sentenza", "ordinanza")):
+        return "giurisprudenza"
+    if any(x in testo for x in ("massima", "principio di diritto")):
+        return "massima"
+    if any(x in testo for x in ("rivista", "commento", "dottrina", "autore")):
+        return "dottrina"
+    if spunto.origine == SpuntoRicerca.Origine.MANUALE:
+        return "materiale manuale"
+    return "fonte web"
 
 
 def _fonti_tracciate_richiesta(obj: Richiesta):
@@ -397,6 +419,36 @@ class EventoDecisionaleSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class CommentoEditorSerializer(serializers.ModelSerializer):
+    utente_username = serializers.CharField(source="utente.username", read_only=True, default="")
+    sezione_label = serializers.CharField(source="get_sezione_display", read_only=True)
+
+    class Meta:
+        model = CommentoEditor
+        fields = [
+            "id",
+            "lavoro",
+            "utente",
+            "utente_username",
+            "sezione",
+            "sezione_label",
+            "riferimento_id",
+            "testo",
+            "risolto",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "lavoro",
+            "utente",
+            "utente_username",
+            "sezione_label",
+            "created_at",
+            "updated_at",
+        ]
+
+
 class BozzaSerializer(serializers.ModelSerializer):
     class Meta:
         model = Bozza
@@ -406,6 +458,8 @@ class BozzaSerializer(serializers.ModelSerializer):
 class SpuntoRicercaSerializer(serializers.ModelSerializer):
     fonte_affidabilita = serializers.SerializerMethodField()
     fonte_label = serializers.SerializerMethodField()
+    tipo_fonte = serializers.SerializerMethodField()
+    motivazione_affidabilita = serializers.SerializerMethodField()
 
     def get_fonte_affidabilita(self, obj):
         if obj.stato_fonte == SpuntoRicerca.StatoFonte.INSUFFICIENTE:
@@ -421,6 +475,21 @@ class SpuntoRicercaSerializer(serializers.ModelSerializer):
             return "Materiale manuale da verificare"
         return _qualifica_fonte(obj.fonte)[1]
 
+    def get_tipo_fonte(self, obj):
+        return _tipo_fonte_giuridica(obj)
+
+    def get_motivazione_affidabilita(self, obj):
+        if obj.stato_fonte == SpuntoRicerca.StatoFonte.INSUFFICIENTE:
+            return "La ricerca non ha restituito fonti sufficientemente verificabili."
+        livello = self.get_fonte_affidabilita(obj)
+        if livello == "alta":
+            return "Fonte istituzionale o primaria: usare comunque previa verifica del testo vigente."
+        if livello == "media":
+            return "Fonte utile per orientarsi, da confrontare con norma o provvedimento originale."
+        if livello == "bassa":
+            return "Fonte potenzialmente fragile: non citarla senza riscontro autonomo."
+        return "Fonte non indicata: trattala come appunto interno, non come citazione."
+
     class Meta:
         model = SpuntoRicerca
         fields = [
@@ -433,6 +502,8 @@ class SpuntoRicercaSerializer(serializers.ModelSerializer):
             "stato_fonte",
             "fonte_affidabilita",
             "fonte_label",
+            "tipo_fonte",
+            "motivazione_affidabilita",
             "origine",
             "created_at",
         ]

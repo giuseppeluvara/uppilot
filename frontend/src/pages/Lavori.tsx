@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ChevronRight, FolderOpen, Plus, Search, Trash2 } from "lucide-react";
+import { ChevronRight, FileUp, FolderOpen, Plus, Search, Sparkles, Trash2 } from "lucide-react";
 import { api, ApiError } from "@/api";
 import type { Lavoro } from "@/types";
 import { statoLavoro } from "@/lib/stato";
@@ -36,6 +36,7 @@ export function Lavori() {
   const [lavoroDaEliminare, setLavoroDaEliminare] = useState<Lavoro | null>(null);
   const [eliminazione, setEliminazione] = useState(false);
   const cercaRef = useRef<HTMLInputElement>(null);
+  const importRef = useRef<HTMLInputElement>(null);
 
   async function ricarica() {
     setLavori(await api.get<Lavoro[]>("/storico/"));
@@ -74,6 +75,27 @@ export function Lavori() {
     apri(l.id);
   }
 
+  async function creaDemo(tipo: "civile" | "penale") {
+    try {
+      const l = await api.post<Lavoro>("/lavori/demo/", { tipo });
+      toast.success("Fascicolo demo creato");
+      apri(l.id);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Demo non creabile.");
+    }
+  }
+
+  async function importaBackup(file: File) {
+    try {
+      const payload = JSON.parse(await file.text());
+      const l = await api.post<Lavoro>("/lavori/importa-backup/", payload);
+      toast.success("Backup importato");
+      apri(l.id);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Backup non valido.");
+    }
+  }
+
   async function eliminaConfermato() {
     if (!lavoroDaEliminare) return;
     setEliminazione(true);
@@ -98,18 +120,45 @@ export function Lavori() {
             Crea un nuovo lavoro o riprendi uno dall'archivio.
           </p>
         </div>
-        <form onSubmit={crea} className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          <Input
-            placeholder="Titolo del nuovo lavoro"
-            value={titolo}
-            onChange={(e) => setTitolo(e.target.value)}
-            className="sm:w-64"
-          />
-          <Button type="submit">
-            <Plus />
-            Nuovo lavoro
-          </Button>
-        </form>
+        <div className="grid gap-2">
+          <form onSubmit={crea} className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <Input
+              placeholder="Titolo del nuovo lavoro"
+              value={titolo}
+              onChange={(e) => setTitolo(e.target.value)}
+              className="sm:w-64"
+            />
+            <Button type="submit">
+              <Plus />
+              Nuovo lavoro
+            </Button>
+          </form>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button type="button" variant="outline" size="sm" onClick={() => creaDemo("civile")}>
+              <Sparkles />
+              Demo civile
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={() => creaDemo("penale")}>
+              <Sparkles />
+              Demo penale
+            </Button>
+            <input
+              ref={importRef}
+              type="file"
+              accept=".json,application/json"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = "";
+                if (file) void importaBackup(file);
+              }}
+            />
+            <Button type="button" variant="outline" size="sm" onClick={() => importRef.current?.click()}>
+              <FileUp />
+              Importa backup
+            </Button>
+          </div>
+        </div>
       </div>
 
       <Card>

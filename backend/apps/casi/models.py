@@ -58,6 +58,30 @@ class Lavoro(models.Model):
     # Modello di redazione (facoltativo): sample/template che definisce impostazione
     # (suddivisione in paragrafi) e metodo di scrittura della bozza. Guida l'analisi.
     modello_testo = models.TextField(blank=True)
+    assegnato_a = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="lavori_assegnati",
+    )
+    revisore = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="lavori_da_revisionare",
+    )
+    stato_revisione = models.CharField(
+        max_length=24,
+        choices=[
+            ("da_rivedere", "Da rivedere"),
+            ("in_revisione", "In revisione"),
+            ("validato", "Validato"),
+            ("esportato", "Esportato"),
+        ],
+        default="da_rivedere",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -126,6 +150,8 @@ class Documento(models.Model):
         SezioneDocumenti, on_delete=models.CASCADE, related_name="documenti"
     )
     file = models.FileField(upload_to="documenti/%Y/%m/")
+    nome_logico = models.CharField(max_length=255, blank=True)
+    ordine = models.PositiveIntegerField(default=0)
     tipo_rilevato = models.CharField(max_length=64, blank=True)
 
     # Estrazione testo

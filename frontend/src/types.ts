@@ -47,6 +47,9 @@ export interface DocumentiStatistiche {
 export interface Documento {
   id: number;
   file: string;
+  nome_logico: string;
+  ordine: number;
+  tipo_rilevato: string;
   stato_estrazione: "in_attesa" | "in_corso" | "completato" | "errore";
   errore_estrazione: string;
   metodo_estrazione: string;
@@ -84,6 +87,9 @@ export interface Lavoro {
   ricerca_errore: string;
   ricerca_progresso: ProgressoTask;
   modello_testo: string;
+  assegnato_a: number | null;
+  revisore: number | null;
+  stato_revisione: "da_rivedere" | "in_revisione" | "validato" | "esportato";
   sezioni: Sezione[];
   documenti_statistiche: DocumentiStatistiche;
   checklist: WorkflowChecklist;
@@ -125,6 +131,8 @@ export interface FonteTracciata {
   snippet: string;
   posizione: number;
   anchor: string;
+  valutazione_operatore?: "decisiva" | "irrilevante" | "da_verificare";
+  valutazione_label?: string;
 }
 
 export type StatoProva =
@@ -243,8 +251,111 @@ export interface Spunto {
   stato_fonte: "ok" | "insufficiente";
   fonte_affidabilita: "alta" | "media" | "bassa" | "non_indicata" | "insufficiente";
   fonte_label: string;
+  tipo_fonte: string;
+  motivazione_affidabilita: string;
   origine: "web" | "manuale";
   created_at: string;
+}
+
+export interface CommentoEditor {
+  id: number;
+  lavoro: number;
+  utente: number | null;
+  utente_username: string;
+  sezione: "in_fatto" | "in_diritto" | "pqm" | "fonte" | "privacy" | "generale";
+  sezione_label: string;
+  riferimento_id: number | null;
+  testo: string;
+  risolto: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AzioneLacuna {
+  tipo: string;
+  label: string;
+  descrizione: string;
+  fatto_id: number | null;
+  richiesta_id: number | null;
+  severita: "alta" | "media" | "bassa";
+}
+
+export interface RevisioneChecklistItem {
+  id: string;
+  label: string;
+  ok: boolean;
+}
+
+export interface TemplateProvvedimento {
+  id: string;
+  label: string;
+  ambito: string;
+  testo: string;
+}
+
+export interface RevisioneFascicolo {
+  pronto_export: boolean;
+  messaggio: string;
+  blocchi: string[];
+  avvisi: string[];
+  checklist: RevisioneChecklistItem[];
+  dashboard: {
+    oggetto: string;
+    stato: string;
+    parti_placeholder: string[];
+    domande: {
+      id: number;
+      parte: Richiesta["parte_richiedente"];
+      tipo: Richiesta["tipo"];
+      testo: string;
+      confidence: number;
+    }[];
+    prove_chiave: FonteTracciata[];
+    punti_controversi: string[];
+    rischi: RedTeamIssue[];
+    prossime_azioni: AzioneLacuna[];
+  };
+  qualita_ai: {
+    score: number;
+    documenti_coperti: number;
+    documenti_utilizzabili: number;
+    copertura_documenti_percentuale: number;
+    richieste_totali: number;
+    richieste_confidenza_bassa: number;
+    fonti_totali: number;
+    fonti_deboli: number;
+    fonti_assenti: number;
+    fonti_decisive: number;
+    quesiti_aperti: number;
+    coerenze_da_rivedere: number;
+    progressi: Record<string, unknown>;
+  };
+  red_team: RedTeamReport;
+  azioni_lacune: AzioneLacuna[];
+  privacy_assistita: {
+    ok: boolean;
+    report: PrivacyReport;
+    entita: { placeholder: string; valore: string }[];
+    placeholder_sospetti: string[];
+    residui_sospetti: unknown[];
+  };
+  documenti_workflow: {
+    totali: number;
+    accettati: number;
+    da_verificare: number;
+    in_lavorazione: number;
+    duplicati_sospetti: { documento_id: number; nome: string; simile_a: number }[];
+    ordine_cronologico: {
+      id: number;
+      nome: string;
+      nome_logico: string;
+      ordine: number;
+      sezione: Sezione["tipo"];
+      tipo_rilevato: string;
+      created_at: string;
+    }[];
+  };
+  template_disponibili: TemplateProvvedimento[];
 }
 
 export interface DocumentoCorpus {
