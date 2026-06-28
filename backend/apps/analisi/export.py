@@ -27,7 +27,8 @@ from docx.shared import Pt, RGBColor
 
 from apps.casi.privacy import maschera_residui
 
-from .models import Bozza
+from .models import Bozza, EventoDecisionale, FattoProcessuale
+from .serializers import FattoProcessualeSerializer
 
 _PARTE_LABEL = {"attore": "attore", "convenuto": "convenuto/ricorrente"}
 
@@ -267,6 +268,101 @@ def genera_docx(lavoro, in_chiaro: bool = False) -> bytes:
         doc.add_paragraph(chiaro(bozza.pqm))
     else:
         doc.add_paragraph("[Da compilare dall'operatore]")
+
+    if not da_template:
+        _numeri_pagina(doc)
+
+    buffer = BytesIO()
+    doc.save(buffer)
+    return buffer.getvalue()
+
+
+def genera_audit_docx(lavoro) -> bytes:
+    """Allegato interno di audit: matrice, fonti, lacune e scelte umane."""
+
+    doc, da_template = _documento_base()
+    if not da_template:
+        _applica_stili(doc)
+
+    doc.add_paragraph("ALLEGATO DI AUDIT - UPPILOT", style="Title").alignment = (
+        WD_ALIGN_PARAGRAPH.CENTER
+    )
+    doc.add_paragraph(f"Fascicolo #{lavoro.id} - {lavoro.titolo}")
+
+    avviso = doc.add_paragraph()
+    _ombreggia(avviso, _AVVISO_FILL)
+    run = avviso.add_run(
+        "Documento interno di controllo: riepiloga fonti, lacune e scelte umane. "
+        "Non sostituisce la revisione del magistrato/operatore."
+    )
+    run.italic = True
+    run.font.size = Pt(10)
+
+    doc.add_heading("1. Matrice richieste/prove", level=1)
+    righe = (
+        FattoProcessuale.objects.filter(richiesta__lavoro=lavoro)
+        .select_related("richiesta", "richiesta__lavoro")
+        .prefetch_related("richiesta__allegati_collegati")
+        .order_by("richiesta__ordine", "ordine", "id")
+    )
+    if not righe.exists():
+        doc.add_paragraph("Nessuna riga matrice disponibile.")
+    for i, fatto in enumerate(righe, start=1):
+        data = FattoProcessualeSerializer(fatto).data
+        doc.add_heading(f"{i}. Richiesta {data['richiesta_id']}", level=2)
+        doc.add_paragraph(data["richiesta_testo"] or "—")
+
+        stato = doc.add_paragraph()
+        stato.add_run("Stato prova: ").bold = True
+        stato.add_run(data["stato_prova_label"])
+        stato.add_run(" · Contraddittorio: ").bold = True
+        stato.add_run(data["stato_contraddittorio_label"])
+        stato.add_run(" · Suggerito: ").bold = True
+        stato.add_run(data["stato_contraddittorio_suggerito_label"])
+
+        if data["testo"]:
+            p = doc.add_paragraph()
+            p.add_run("Fatto rilevante: ").bold = True
+            p.add_run(data["testo"])
+        if data["note_operatore"]:
+            p = doc.add_paragraph()
+            p.add_run("Note operatore: ").bold = True
+            p.add_run(data["note_operatore"])
+        if data["note_contraddittorio"]:
+            p = doc.add_paragraph()
+            p.add_run("Note contraddittorio: ").bold = True
+            p.add_run(data["note_contraddittorio"])
+
+        if data["lacune"]:
+            doc.add_paragraph("Lacune / punti da verificare:")
+            for lacuna in data["lacune"]:
+                doc.add_paragraph(str(lacuna), style="List Bullet")
+
+        if data["fonti"]:
+            doc.add_paragraph("Fonti principali:")
+            for fonte in data["fonti"][:5]:
+                score = int(round(float(fonte.get("score") or 0) * 100))
+                testo = (
+                    f"Documento {fonte.get('documento_id')} - "
+                    f"{fonte.get('sezione_label', '')} - {score}%"
+                )
+                snippet = fonte.get("snippet")
+                if snippet:
+                    testo += f": {snippet}"
+                doc.add_paragraph(testo, style="List Bullet")
+
+    doc.add_heading("2. Registro decisionale", level=1)
+    eventi = EventoDecisionale.objects.filter(lavoro=lavoro).select_related(
+        "utente", "richiesta", "fatto"
+    )[:40]
+    if not eventi:
+        doc.add_paragraph("Nessun evento decisionale registrato.")
+    for evento in eventi:
+        p = doc.add_paragraph()
+        p.add_run(f"{evento.created_at:%d/%m/%Y %H:%M} - {evento.get_tipo_display()}: ").bold = True
+        p.add_run(evento.descrizione or evento.campo or "evento")
+        if evento.utente:
+            p.add_run(f" ({evento.utente.username})")
 
     if not da_template:
         _numeri_pagina(doc)

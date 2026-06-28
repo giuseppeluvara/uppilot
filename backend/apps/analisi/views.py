@@ -10,10 +10,11 @@ from ai.factory import commerciale_disponibile
 from apps.casi.models import Documento, Lavoro
 from apps.casi.privacy import privacy_report
 
-from .export import genera_docx
-from .models import Bozza, FattoProcessuale, Richiesta, SpuntoRicerca
+from .export import genera_audit_docx, genera_docx
+from .models import Bozza, EventoDecisionale, FattoProcessuale, Richiesta, SpuntoRicerca
 from .serializers import (
     BozzaSerializer,
+    EventoDecisionaleSerializer,
     FattoProcessualeSerializer,
     RichiestaSerializer,
     SpuntoRicercaSerializer,
@@ -149,6 +150,168 @@ def _sincronizza_matrice_lavoro(lavoro: Lavoro) -> None:
         for richiesta in richieste
         if richiesta.id not in esistenti
     )
+
+
+def _registra_evento(
+    *,
+    lavoro: Lavoro,
+    utente,
+    tipo: str,
+    descrizione: str = "",
+    richiesta: Richiesta | None = None,
+    fatto: FattoProcessuale | None = None,
+    campo: str = "",
+    valore_precedente=None,
+    valore_nuovo=None,
+) -> None:
+    EventoDecisionale.objects.create(
+        lavoro=lavoro,
+        utente=utente if getattr(utente, "is_authenticated", False) else None,
+        richiesta=richiesta,
+        fatto=fatto,
+        tipo=tipo,
+        campo=campo,
+        descrizione=descrizione,
+        valore_precedente=valore_precedente or {},
+        valore_nuovo=valore_nuovo or {},
+    )
+
+
+def _red_team_lavoro(lavoro: Lavoro) -> dict:
+    _sincronizza_matrice_lavoro(lavoro)
+    issues = []
+    righe = (
+        FattoProcessuale.objects.filter(richiesta__lavoro=lavoro)
+        .select_related("richiesta", "richiesta__lavoro")
+        .prefetch_related("richiesta__allegati_collegati")
+    )
+    for fatto in righe:
+        data = FattoProcessualeSerializer(fatto).data
+        richiesta = fatto.richiesta
+        base = {
+            "richiesta_id": richiesta.id,
+            "fatto_id": fatto.id,
+            "richiesta": richiesta.testo,
+        }
+        if data["fonti_count"] == 0:
+            issues.append(
+                {
+                    **base,
+                    "severita": "alta",
+                    "ambito": "prove",
+                    "messaggio": "Richiesta senza fonti interne agganciate.",
+                    "azione_suggerita": "Collega documenti o marca il fatto come non provato/insufficiente.",
+                }
+            )
+        elif data["score_massimo"] < 0.45:
+            issues.append(
+                {
+                    **base,
+                    "severita": "media",
+                    "ambito": "prove",
+                    "messaggio": "Fonti presenti ma con score debole.",
+                    "azione_suggerita": "Verifica manualmente snippet e pertinenza della fonte.",
+                }
+            )
+        if data["stato_suggerito"] == FattoProcessuale.StatoProva.INSUFFICIENTE and fatto.stato_prova == FattoProcessuale.StatoProva.PROVATO:
+            issues.append(
+                {
+                    **base,
+                    "severita": "alta",
+                    "ambito": "stato prova",
+                    "messaggio": "La riga è marcata provata, ma il sistema suggerisce insufficienza.",
+                    "azione_suggerita": "Motiva nelle note perché il fatto è provato o cambia stato prova.",
+                }
+            )
+        if richiesta.quesiti_aperti and fatto.stato_prova == FattoProcessuale.StatoProva.PROVATO:
+            issues.append(
+                {
+                    **base,
+                    "severita": "media",
+                    "ambito": "decisione umana",
+                    "messaggio": "Fatto marcato provato nonostante quesiti aperti.",
+                    "azione_suggerita": "Risolvi i quesiti o sposta lo stato su da decidere/controverso.",
+                }
+            )
+        if fatto.stato_contraddittorio == FattoProcessuale.StatoContraddittorio.SILENTE and not fatto.note_contraddittorio:
+            issues.append(
+                {
+                    **base,
+                    "severita": "bassa",
+                    "ambito": "contraddittorio",
+                    "messaggio": "Controparte silente senza nota esplicativa.",
+                    "azione_suggerita": "Annota se il silenzio equivale a non contestazione o richiede verifica.",
+                }
+            )
+        if data["fonti_controparte"] and fatto.stato_contraddittorio in {
+            FattoProcessuale.StatoContraddittorio.NON_CONTESTATO,
+            FattoProcessuale.StatoContraddittorio.PACIFICO,
+        }:
+            issues.append(
+                {
+                    **base,
+                    "severita": "alta",
+                    "ambito": "contraddittorio",
+                    "messaggio": "Sono presenti fonti della controparte ma il contraddittorio è marcato pacifico/non contestato.",
+                    "azione_suggerita": "Rivedi lo stato del contraddittorio o motiva la non contestazione.",
+                }
+            )
+        if not (richiesta.motivazione or "").strip():
+            issues.append(
+                {
+                    **base,
+                    "severita": "media",
+                    "ambito": "motivazione",
+                    "messaggio": "Motivazione in diritto non compilata.",
+                    "azione_suggerita": "Completa la motivazione o lascia un quesito umano esplicito.",
+                }
+            )
+        if richiesta.motivazione and fatto.stato_prova in {
+            FattoProcessuale.StatoProva.NON_PROVATO,
+            FattoProcessuale.StatoProva.INSUFFICIENTE,
+        }:
+            issues.append(
+                {
+                    **base,
+                    "severita": "alta",
+                    "ambito": "motivazione/prova",
+                    "messaggio": "Motivazione presente su una riga marcata non provata o insufficiente.",
+                    "azione_suggerita": "Allinea motivazione e stato prova prima dell'export.",
+                }
+            )
+
+    bozza = Bozza.objects.filter(lavoro=lavoro).first()
+    if not bozza or not (bozza.pqm or "").strip():
+        issues.append(
+            {
+                "richiesta_id": None,
+                "fatto_id": None,
+                "richiesta": "",
+                "severita": "alta",
+                "ambito": "PQM",
+                "messaggio": "P.Q.M. non compilato.",
+                "azione_suggerita": "Compila il dispositivo prima della revisione finale.",
+            }
+        )
+    elif any(not (r.motivazione or "").strip() for r in lavoro.richieste.all()):
+        issues.append(
+            {
+                "richiesta_id": None,
+                "fatto_id": None,
+                "richiesta": "",
+                "severita": "alta",
+                "ambito": "PQM/motivazione",
+                "messaggio": "P.Q.M. compilato con una o più motivazioni mancanti.",
+                "azione_suggerita": "Completa le motivazioni prima di consolidare il dispositivo.",
+            }
+        )
+
+    conteggi = {
+        "alta": sum(1 for i in issues if i["severita"] == "alta"),
+        "media": sum(1 for i in issues if i["severita"] == "media"),
+        "bassa": sum(1 for i in issues if i["severita"] == "bassa"),
+    }
+    return {"ok": not issues, "totale": len(issues), "conteggi": conteggi, "issues": issues}
 
 
 class AvviaAnalisiView(APIView):
@@ -409,6 +572,18 @@ class MatriceLavoroView(ListAPIView):
         )
 
 
+class EventiDecisioneListView(ListAPIView):
+    """Registro decisionale umano del lavoro."""
+
+    serializer_class = EventoDecisionaleSerializer
+
+    def get_queryset(self):
+        lavoro = _lavoro_utente(self.request, self.kwargs["lavoro_id"])
+        return EventoDecisionale.objects.filter(lavoro=lavoro).select_related(
+            "utente", "richiesta", "fatto"
+        )
+
+
 class RichiestaUpdateView(APIView):
     """Editor: l'operatore redige la motivazione 'in diritto' di una richiesta (§1)."""
 
@@ -416,8 +591,20 @@ class RichiestaUpdateView(APIView):
         richiesta = get_object_or_404(Richiesta, pk=pk, lavoro__utente=request.user)
         motivazione = request.data.get("motivazione")
         if motivazione is not None:
+            precedente = richiesta.motivazione
             richiesta.motivazione = motivazione
             richiesta.save(update_fields=["motivazione"])
+            if precedente != motivazione:
+                _registra_evento(
+                    lavoro=richiesta.lavoro,
+                    utente=request.user,
+                    tipo=EventoDecisionale.Tipo.MOTIVAZIONE_AGGIORNATA,
+                    richiesta=richiesta,
+                    campo="motivazione",
+                    descrizione="Motivazione in diritto aggiornata.",
+                    valore_precedente={"motivazione": precedente},
+                    valore_nuovo={"motivazione": motivazione},
+                )
         return Response(RichiestaSerializer(richiesta).data)
 
 
@@ -430,9 +617,34 @@ class FattoProcessualeUpdateView(APIView):
             pk=pk,
             richiesta__lavoro__utente=request.user,
         )
+        campi_tracciati = {
+            "testo",
+            "stato_prova",
+            "funzione_prevalente",
+            "stato_contraddittorio",
+            "note_operatore",
+            "note_contraddittorio",
+            "quesito_umano",
+        }
+        precedente = {c: getattr(fatto, c) for c in campi_tracciati}
         serializer = FattoProcessualeSerializer(fatto, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
+        fatto.refresh_from_db()
+        nuovo = {c: getattr(fatto, c) for c in campi_tracciati}
+        cambiati = {c: {"prima": precedente[c], "dopo": nuovo[c]} for c in campi_tracciati if precedente[c] != nuovo[c]}
+        if cambiati:
+            _registra_evento(
+                lavoro=fatto.richiesta.lavoro,
+                utente=request.user,
+                tipo=EventoDecisionale.Tipo.MATRICE_AGGIORNATA,
+                richiesta=fatto.richiesta,
+                fatto=fatto,
+                campo=", ".join(sorted(cambiati)),
+                descrizione="Riga della matrice richieste/prove aggiornata.",
+                valore_precedente={c: v["prima"] for c, v in cambiati.items()},
+                valore_nuovo={c: v["dopo"] for c, v in cambiati.items()},
+            )
         return Response(serializer.data)
 
 
@@ -457,12 +669,60 @@ class BozzaView(APIView):
         for campo in ("in_fatto", "pqm"):
             valore = request.data.get(campo)
             if valore is not None:
+                precedente = getattr(bozza, campo)
                 setattr(bozza, campo, valore)
                 campi.append(campo)
+                if precedente != valore:
+                    _registra_evento(
+                        lavoro=lavoro,
+                        utente=request.user,
+                        tipo=EventoDecisionale.Tipo.BOZZA_AGGIORNATA,
+                        campo=campo,
+                        descrizione=f"Campo bozza aggiornato: {campo}.",
+                        valore_precedente={campo: precedente},
+                        valore_nuovo={campo: valore},
+                    )
         if campi:
             bozza.versione += 1
             bozza.save(update_fields=[*campi, "versione", "updated_at"])
         return Response(BozzaSerializer(bozza).data)
+
+
+class EsportaAuditDocxView(APIView):
+    """Scarica l'allegato audit della matrice e del registro decisionale."""
+
+    def get(self, request, lavoro_id):
+        lavoro = _lavoro_utente(request, lavoro_id)
+        _sincronizza_matrice_lavoro(lavoro)
+        contenuto = genera_audit_docx(lavoro)
+        _registra_evento(
+            lavoro=lavoro,
+            utente=request.user,
+            tipo=EventoDecisionale.Tipo.AUDIT_ESPORTATO,
+            descrizione="Allegato audit esportato.",
+        )
+        resp = HttpResponse(contenuto, content_type=DOCX_CONTENT_TYPE)
+        resp["Content-Disposition"] = f'attachment; filename="audit_lavoro_{lavoro.id}.docx"'
+        return resp
+
+
+class RedTeamFascicoloView(APIView):
+    """Controllo critico su richieste, prove, motivazione e P.Q.M."""
+
+    def post(self, request, lavoro_id):
+        lavoro = _lavoro_utente(request, lavoro_id)
+        report = _red_team_lavoro(lavoro)
+        _registra_evento(
+            lavoro=lavoro,
+            utente=request.user,
+            tipo=EventoDecisionale.Tipo.RED_TEAM_ESEGUITO,
+            descrizione="Red team del fascicolo eseguito.",
+            valore_nuovo={
+                "totale": report["totale"],
+                "conteggi": report["conteggi"],
+            },
+        )
+        return Response(report)
 
 
 class EsportaDocxView(APIView):

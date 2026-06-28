@@ -143,6 +143,14 @@ export type FunzioneFonte =
   | "insufficiente"
   | "contesto";
 
+export type StatoContraddittorio =
+  | "pacifico"
+  | "contestato"
+  | "non_contestato"
+  | "controprovato"
+  | "silente"
+  | "da_decidere";
+
 export interface FattoProcessuale {
   id: number;
   richiesta_id: number;
@@ -166,10 +174,54 @@ export interface FattoProcessuale {
   stato_suggerito_label: string;
   funzione_prevalente: FunzioneFonte;
   funzione_prevalente_label: string;
+  stato_contraddittorio: StatoContraddittorio;
+  stato_contraddittorio_label: string;
+  stato_contraddittorio_suggerito: StatoContraddittorio;
+  stato_contraddittorio_suggerito_label: string;
+  fonti_attore: FonteTracciata[];
+  fonti_convenuto: FonteTracciata[];
+  fonti_generiche: FonteTracciata[];
+  fonti_supporto: FonteTracciata[];
+  fonti_controparte: FonteTracciata[];
+  contraddittorio_lacune: string[];
   note_operatore: string;
+  note_contraddittorio: string;
   quesito_umano: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface EventoDecisionale {
+  id: number;
+  lavoro: number;
+  richiesta: number | null;
+  fatto: number | null;
+  utente: number | null;
+  utente_username: string;
+  tipo: string;
+  tipo_label: string;
+  campo: string;
+  descrizione: string;
+  valore_precedente: Record<string, unknown>;
+  valore_nuovo: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface RedTeamIssue {
+  richiesta_id: number | null;
+  fatto_id: number | null;
+  richiesta: string;
+  severita: "alta" | "media" | "bassa";
+  ambito: string;
+  messaggio: string;
+  azione_suggerita: string;
+}
+
+export interface RedTeamReport {
+  ok: boolean;
+  totale: number;
+  conteggi: { alta: number; media: number; bassa: number };
+  issues: RedTeamIssue[];
 }
 
 export interface Bozza {

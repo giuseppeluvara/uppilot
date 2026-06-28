@@ -3,7 +3,7 @@ import re
 from rest_framework import serializers
 from urllib.parse import urlparse
 
-from .models import Bozza, FattoProcessuale, Richiesta, SpuntoRicerca
+from .models import Bozza, EventoDecisionale, FattoProcessuale, Richiesta, SpuntoRicerca
 from .services import documenti_utilizzabili, traccia_fonti_richiesta
 
 
@@ -52,6 +52,10 @@ def _fonti_tracciate_richiesta(obj: Richiesta):
         documenti,
         allegati,
     )
+
+
+def _parte_opposta(parte: str) -> str:
+    return Richiesta.Parte.CONVENUTO if parte == Richiesta.Parte.ATTORE else Richiesta.Parte.ATTORE
 
 
 class RichiestaSerializer(serializers.ModelSerializer):
@@ -149,6 +153,15 @@ class FattoProcessualeSerializer(serializers.ModelSerializer):
     stato_suggerito_label = serializers.SerializerMethodField()
     stato_prova_label = serializers.SerializerMethodField()
     funzione_prevalente_label = serializers.SerializerMethodField()
+    stato_contraddittorio_label = serializers.SerializerMethodField()
+    stato_contraddittorio_suggerito = serializers.SerializerMethodField()
+    stato_contraddittorio_suggerito_label = serializers.SerializerMethodField()
+    fonti_attore = serializers.SerializerMethodField()
+    fonti_convenuto = serializers.SerializerMethodField()
+    fonti_generiche = serializers.SerializerMethodField()
+    fonti_supporto = serializers.SerializerMethodField()
+    fonti_controparte = serializers.SerializerMethodField()
+    contraddittorio_lacune = serializers.SerializerMethodField()
 
     def _fonti(self, obj) -> list[dict]:
         return [
@@ -160,6 +173,34 @@ class FattoProcessualeSerializer(serializers.ModelSerializer):
     def _score_massimo(self, obj) -> float:
         scores = [float(f.get("score") or 0) for f in self._fonti(obj)]
         return max(scores) if scores else 0.0
+
+    def _fonti_sezione(self, obj, sezione: str) -> list[dict]:
+        return [f for f in self._fonti(obj) if f.get("sezione") == sezione]
+
+    def _fonti_supporto(self, obj) -> list[dict]:
+        parte = obj.richiesta.parte_richiedente
+        return [
+            f
+            for f in self._fonti(obj)
+            if f.get("sezione") in {parte, "generici"}
+        ]
+
+    def _fonti_controparte(self, obj) -> list[dict]:
+        return self._fonti_sezione(obj, _parte_opposta(obj.richiesta.parte_richiedente))
+
+    def _stato_contraddittorio_suggerito(self, obj):
+        supporto = self._fonti_supporto(obj)
+        controparte = self._fonti_controparte(obj)
+        non_contestazioni = obj.richiesta.non_contestazioni or []
+        if supporto and controparte:
+            return FattoProcessuale.StatoContraddittorio.CONTESTATO
+        if controparte and not supporto:
+            return FattoProcessuale.StatoContraddittorio.CONTROPROVATO
+        if supporto and non_contestazioni:
+            return FattoProcessuale.StatoContraddittorio.NON_CONTESTATO
+        if supporto:
+            return FattoProcessuale.StatoContraddittorio.SILENTE
+        return FattoProcessuale.StatoContraddittorio.DA_DECIDERE
 
     def get_allegati_collegati(self, obj):
         return list(obj.richiesta.allegati_collegati.values_list("id", flat=True))
@@ -196,6 +237,7 @@ class FattoProcessualeSerializer(serializers.ModelSerializer):
             lacune.append("Fonti presenti ma con pertinenza debole: verifica manuale necessaria.")
         if richiesta.quesiti_aperti:
             lacune.append(f"{len(richiesta.quesiti_aperti)} quesiti aperti da decidere.")
+        lacune.extend(self.get_contraddittorio_lacune(obj))
         if not (richiesta.motivazione or "").strip():
             lacune.append("Motivazione in diritto non ancora consolidata.")
         return lacune
@@ -217,6 +259,45 @@ class FattoProcessualeSerializer(serializers.ModelSerializer):
 
     def get_funzione_prevalente_label(self, obj):
         return obj.get_funzione_prevalente_display()
+
+    def get_stato_contraddittorio_label(self, obj):
+        return obj.get_stato_contraddittorio_display()
+
+    def get_stato_contraddittorio_suggerito(self, obj):
+        return self._stato_contraddittorio_suggerito(obj)
+
+    def get_stato_contraddittorio_suggerito_label(self, obj):
+        return FattoProcessuale.StatoContraddittorio(
+            self._stato_contraddittorio_suggerito(obj)
+        ).label
+
+    def get_fonti_attore(self, obj):
+        return self._fonti_sezione(obj, Richiesta.Parte.ATTORE)
+
+    def get_fonti_convenuto(self, obj):
+        return self._fonti_sezione(obj, Richiesta.Parte.CONVENUTO)
+
+    def get_fonti_generiche(self, obj):
+        return self._fonti_sezione(obj, "generici")
+
+    def get_fonti_supporto(self, obj):
+        return self._fonti_supporto(obj)
+
+    def get_fonti_controparte(self, obj):
+        return self._fonti_controparte(obj)
+
+    def get_contraddittorio_lacune(self, obj):
+        supporto = self._fonti_supporto(obj)
+        controparte = self._fonti_controparte(obj)
+        stato = self._stato_contraddittorio_suggerito(obj)
+        lacune = []
+        if supporto and not controparte and not obj.richiesta.non_contestazioni:
+            lacune.append("Non risultano fonti della controparte su questa richiesta.")
+        if stato == FattoProcessuale.StatoContraddittorio.CONTROPROVATO:
+            lacune.append("Le fonti agganciate provengono solo dalla controparte.")
+        if stato == FattoProcessuale.StatoContraddittorio.DA_DECIDERE and not supporto:
+            lacune.append("Contraddittorio non leggibile: mancano fonti di supporto.")
+        return lacune
 
     class Meta:
         model = FattoProcessuale
@@ -243,7 +324,18 @@ class FattoProcessualeSerializer(serializers.ModelSerializer):
             "stato_suggerito_label",
             "funzione_prevalente",
             "funzione_prevalente_label",
+            "stato_contraddittorio",
+            "stato_contraddittorio_label",
+            "stato_contraddittorio_suggerito",
+            "stato_contraddittorio_suggerito_label",
+            "fonti_attore",
+            "fonti_convenuto",
+            "fonti_generiche",
+            "fonti_supporto",
+            "fonti_controparte",
+            "contraddittorio_lacune",
             "note_operatore",
+            "note_contraddittorio",
             "quesito_umano",
             "created_at",
             "updated_at",
@@ -267,9 +359,42 @@ class FattoProcessualeSerializer(serializers.ModelSerializer):
             "stato_suggerito",
             "stato_suggerito_label",
             "funzione_prevalente_label",
+            "stato_contraddittorio_label",
+            "stato_contraddittorio_suggerito",
+            "stato_contraddittorio_suggerito_label",
+            "fonti_attore",
+            "fonti_convenuto",
+            "fonti_generiche",
+            "fonti_supporto",
+            "fonti_controparte",
+            "contraddittorio_lacune",
             "created_at",
             "updated_at",
         ]
+
+
+class EventoDecisionaleSerializer(serializers.ModelSerializer):
+    tipo_label = serializers.CharField(source="get_tipo_display", read_only=True)
+    utente_username = serializers.CharField(source="utente.username", read_only=True, default="")
+
+    class Meta:
+        model = EventoDecisionale
+        fields = [
+            "id",
+            "lavoro",
+            "richiesta",
+            "fatto",
+            "utente",
+            "utente_username",
+            "tipo",
+            "tipo_label",
+            "campo",
+            "descrizione",
+            "valore_precedente",
+            "valore_nuovo",
+            "created_at",
+        ]
+        read_only_fields = fields
 
 
 class BozzaSerializer(serializers.ModelSerializer):

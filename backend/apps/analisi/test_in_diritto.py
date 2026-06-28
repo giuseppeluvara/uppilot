@@ -5,7 +5,7 @@ import pytest
 from rest_framework.test import APIClient
 
 from apps.analisi import tasks
-from apps.analisi.models import Bozza, FattoProcessuale, Richiesta
+from apps.analisi.models import Bozza, EventoDecisionale, FattoProcessuale, Richiesta
 from apps.analisi.services import approfondisci_richiesta
 from apps.casi.models import Documento, Lavoro, SezioneDocumenti
 
@@ -287,6 +287,9 @@ def test_matrice_api_crea_righe_da_richieste_e_fonti(scenario):
     assert riga["fonti_count"] == 1
     assert riga["fonti"][0]["documento_id"] == doc.id
     assert riga["score_massimo"] == 0.78
+    assert riga["fonti_attore"][0]["documento_id"] == doc.id
+    assert riga["stato_contraddittorio_suggerito"] == "silente"
+    assert riga["contraddittorio_lacune"]
 
 
 def test_matrice_patch_persistente_e_protetta(scenario, django_user_model):
@@ -303,7 +306,9 @@ def test_matrice_patch_persistente_e_protetta(scenario, django_user_model):
         {
             "stato_prova": FattoProcessuale.StatoProva.PROVATO,
             "funzione_prevalente": FattoProcessuale.FunzioneFonte.SUPPORTA,
+            "stato_contraddittorio": FattoProcessuale.StatoContraddittorio.NON_CONTESTATO,
             "note_operatore": "Contratto prodotto e non contestato sul punto.",
+            "note_contraddittorio": "La controparte non prende posizione sul contratto.",
             "quesito_umano": "Verificare se l'inadempimento è grave.",
         },
         format="json",
@@ -312,7 +317,11 @@ def test_matrice_patch_persistente_e_protetta(scenario, django_user_model):
     assert resp.status_code == 200
     fatto.refresh_from_db()
     assert fatto.stato_prova == FattoProcessuale.StatoProva.PROVATO
+    assert fatto.stato_contraddittorio == FattoProcessuale.StatoContraddittorio.NON_CONTESTATO
     assert "non contestato" in fatto.note_operatore
+    evento = EventoDecisionale.objects.get(fatto=fatto)
+    assert evento.tipo == EventoDecisionale.Tipo.MATRICE_AGGIORNATA
+    assert "stato_prova" in evento.valore_nuovo
 
     intruso = django_user_model.objects.create_user(username="intruso", password="x")
     client.force_authenticate(user=intruso)
@@ -322,6 +331,56 @@ def test_matrice_patch_persistente_e_protetta(scenario, django_user_model):
         format="json",
     )
     assert negata.status_code == 404
+
+
+def test_red_team_segnala_incoerenze_e_logga_evento(scenario):
+    lavoro, _, richiesta = scenario
+    richiesta.motivazione = ""
+    richiesta.save(update_fields=["motivazione"])
+    FattoProcessuale.objects.create(
+        richiesta=richiesta,
+        testo="Fatto senza fonti",
+        stato_prova=FattoProcessuale.StatoProva.PROVATO,
+    )
+    client = APIClient()
+    client.force_authenticate(user=lavoro.utente)
+
+    resp = client.post(f"/api/lavori/{lavoro.id}/red-team/")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is False
+    assert data["totale"] >= 1
+    assert any(i["ambito"] in {"prove", "motivazione", "PQM"} for i in data["issues"])
+    assert EventoDecisionale.objects.filter(
+        lavoro=lavoro, tipo=EventoDecisionale.Tipo.RED_TEAM_ESEGUITO
+    ).exists()
+
+
+def test_eventi_api_e_audit_export(scenario):
+    lavoro, _, richiesta = scenario
+    evento = EventoDecisionale.objects.create(
+        lavoro=lavoro,
+        utente=lavoro.utente,
+        richiesta=richiesta,
+        tipo=EventoDecisionale.Tipo.MOTIVAZIONE_AGGIORNATA,
+        descrizione="Test evento",
+    )
+    client = APIClient()
+    client.force_authenticate(user=lavoro.utente)
+
+    eventi = client.get(f"/api/lavori/{lavoro.id}/eventi/")
+    assert eventi.status_code == 200
+    assert eventi.json()[0]["id"] == evento.id
+
+    audit = client.get(f"/api/lavori/{lavoro.id}/audit/")
+    assert audit.status_code == 200
+    assert audit["Content-Type"].startswith(
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    assert EventoDecisionale.objects.filter(
+        lavoro=lavoro, tipo=EventoDecisionale.Tipo.AUDIT_ESPORTATO
+    ).exists()
 
 
 def test_endpoint_approfondisci_senza_richieste_400(db, django_user_model):

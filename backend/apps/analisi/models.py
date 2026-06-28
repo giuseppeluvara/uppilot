@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 
 from apps.casi.models import Documento, Lavoro
@@ -87,6 +88,14 @@ class FattoProcessuale(models.Model):
         INSUFFICIENTE = "insufficiente", "Insufficiente"
         CONTESTO = "contesto", "Solo contesto"
 
+    class StatoContraddittorio(models.TextChoices):
+        PACIFICO = "pacifico", "Pacifico"
+        CONTESTATO = "contestato", "Contestato"
+        NON_CONTESTATO = "non_contestato", "Non contestato"
+        CONTROPROVATO = "controprovato", "Controprovato"
+        SILENTE = "silente", "Controparte silente"
+        DA_DECIDERE = "da_decidere", "Da decidere"
+
     richiesta = models.ForeignKey(
         Richiesta, on_delete=models.CASCADE, related_name="fatti_processuali"
     )
@@ -101,7 +110,13 @@ class FattoProcessuale(models.Model):
         choices=FunzioneFonte.choices,
         default=FunzioneFonte.SUPPORTA,
     )
+    stato_contraddittorio = models.CharField(
+        max_length=24,
+        choices=StatoContraddittorio.choices,
+        default=StatoContraddittorio.DA_DECIDERE,
+    )
     note_operatore = models.TextField(blank=True)
+    note_contraddittorio = models.TextField(blank=True)
     quesito_umano = models.TextField(blank=True)
     ordine = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -112,6 +127,58 @@ class FattoProcessuale(models.Model):
 
     def __str__(self) -> str:
         return f"Fatto {self.ordine} - richiesta {self.richiesta_id}"
+
+
+class EventoDecisionale(models.Model):
+    """Registro umano/auditabile delle scelte operative sulla bozza.
+
+    Non e' un log tecnico: conserva le modifiche che incidono su prova,
+    contraddittorio, motivazione, export e controlli di coerenza.
+    """
+
+    class Tipo(models.TextChoices):
+        MATRICE_AGGIORNATA = "matrice_aggiornata", "Matrice aggiornata"
+        MOTIVAZIONE_AGGIORNATA = "motivazione_aggiornata", "Motivazione aggiornata"
+        BOZZA_AGGIORNATA = "bozza_aggiornata", "Bozza aggiornata"
+        AUDIT_ESPORTATO = "audit_esportato", "Audit esportato"
+        RED_TEAM_ESEGUITO = "red_team_eseguito", "Red team eseguito"
+
+    lavoro = models.ForeignKey(
+        Lavoro, on_delete=models.CASCADE, related_name="eventi_decisionali"
+    )
+    utente = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="eventi_decisionali",
+    )
+    richiesta = models.ForeignKey(
+        Richiesta,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="eventi_decisionali",
+    )
+    fatto = models.ForeignKey(
+        FattoProcessuale,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="eventi_decisionali",
+    )
+    tipo = models.CharField(max_length=32, choices=Tipo.choices)
+    campo = models.CharField(max_length=255, blank=True)
+    descrizione = models.TextField(blank=True)
+    valore_precedente = models.JSONField(default=dict, blank=True)
+    valore_nuovo = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+    def __str__(self) -> str:
+        return f"{self.get_tipo_display()} - lavoro {self.lavoro_id}"
 
 
 class SpuntoRicerca(models.Model):
