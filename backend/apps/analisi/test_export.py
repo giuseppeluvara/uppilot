@@ -54,6 +54,37 @@ def test_endpoint_download_docx(lavoro_completo):
     assert resp.content[:2] == b"PK"  # i .docx sono archivi zip
 
 
+def test_endpoint_export_ripara_placeholder_malformed_prima_del_privacy_check(db, django_user_model):
+    u = django_user_model.objects.create_user(username="repair", password="x")
+    lavoro = Lavoro.objects.create(
+        utente=u,
+        titolo="UPP AUDIT 2026-06-28 - Civile appalto complesso",
+        mappa_entita={"[ORGANIZZAZIONE_1]": "Aurora Impianti S.r.l."},
+    )
+    Bozza.objects.create(
+        lavoro=lavoro,
+        in_fatto="[organizzazione_1] ha stipulato il contratto.",
+        pqm="Rigetta o accoglie secondo prova.",
+    )
+    Richiesta.objects.create(
+        lavoro=lavoro,
+        parte_richiedente=Richiesta.Parte.ATTORE,
+        testo="[organizzazione_1] chiede la condanna.",
+        motivazione="[organizzazione_1] ha prodotto una fonte interna sufficiente.",
+        ordine=0,
+    )
+    client = APIClient()
+    client.force_authenticate(user=u)
+
+    resp = client.get(f"/api/lavori/{lavoro.id}/esporta/")
+
+    assert resp.status_code == 200
+    testo = _testi(resp.content)
+    assert "[ORGANIZZAZIONE_1]" in testo
+    assert "[organizzazione_1]" not in testo
+    assert "Aurora Impianti" not in testo
+
+
 def test_export_in_chiaro_sostituisce_i_placeholder(db, django_user_model):
     u = django_user_model.objects.create_user(username="c", password="x")
     lavoro = Lavoro.objects.create(

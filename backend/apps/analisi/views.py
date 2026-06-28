@@ -8,7 +8,7 @@ from rest_framework.views import APIView
 
 from ai.factory import commerciale_disponibile
 from apps.casi.models import Documento, Lavoro
-from apps.casi.privacy import privacy_report
+from apps.casi.privacy import maschera_residui, privacy_report
 
 from .export import genera_audit_docx, genera_docx
 from .models import Bozza, EventoDecisionale, FattoProcessuale, Richiesta, SpuntoRicerca
@@ -751,7 +751,9 @@ class EsportaDocxView(APIView):
                         "\n".join(r.quesiti_aperti or []),
                     ]
                 )
-            report = privacy_report(testi, lavoro.mappa_entita or {}, extra_values=[lavoro.titolo])
+            mappa = lavoro.mappa_entita or {}
+            testi = [maschera_residui(testo, mappa) for testo in testi]
+            report = privacy_report(testi, mappa, extra_values=[lavoro.titolo])
             if not report["ok"]:
                 return Response(
                     {
