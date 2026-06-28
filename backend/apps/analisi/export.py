@@ -220,6 +220,21 @@ def genera_docx(lavoro, in_chiaro: bool = False) -> bytes:
             p.add_run("Onere probatorio: ").bold = True
             p.add_run(chiaro(r.onere_probatorio))
 
+        if r.fonti_tracciate:
+            p = doc.add_paragraph()
+            p.add_run("Fonti interne tracciate:").bold = True
+            for fonte in (r.fonti_tracciate or [])[:3]:
+                if not isinstance(fonte, dict):
+                    continue
+                nome = fonte.get("documento_nome") if in_chiaro else f"Documento {fonte.get('documento_id')}"
+                score = int(round(float(fonte.get("score") or 0) * 100))
+                label = fonte.get("affidabilita_label") or fonte.get("affidabilita") or "Riscontro"
+                testo_fonte = f"{nome} — {label} {score}%"
+                snippet = fonte.get("snippet")
+                if snippet:
+                    testo_fonte += f": {snippet}"
+                doc.add_paragraph(chiaro(testo_fonte), style="List Bullet")
+
         if r.non_contestazioni:
             p = doc.add_paragraph()
             p.add_run("Non contestazioni:").bold = True

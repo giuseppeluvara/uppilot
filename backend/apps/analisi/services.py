@@ -240,8 +240,6 @@ _STOP_RILEVANZA = {
     "parte",
     "attore",
     "convenuto",
-    "condanna",
-    "pagamento",
     "rigetto",
     "accertare",
     "contratto",
@@ -262,6 +260,193 @@ def _token_rilevanti(testo: str) -> set[str]:
             continue
         out.add(token)
     return out
+
+
+def _termini_coincidenti(termini_richiesta: set[str], termini_segmento: set[str]) -> list[str]:
+    termini: list[str] = []
+    for termine in sorted(termini_richiesta):
+        for candidato in termini_segmento:
+            if termine == candidato:
+                termini.append(termine)
+                break
+            if len(termine) >= 6 and len(candidato) >= 6 and termine[:6] == candidato[:6]:
+                termini.append(termine)
+                break
+            if SequenceMatcher(None, termine, candidato).ratio() >= 0.86:
+                termini.append(termine)
+                break
+    return termini
+
+
+def _nome_file_documento(doc) -> str:
+    nome = getattr(getattr(doc, "file", None), "name", "") or f"Documento {doc.id}"
+    return nome.rsplit("/", 1)[-1] or f"Documento {doc.id}"
+
+
+def _url_documento(doc) -> str:
+    try:
+        return doc.file.url
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _sezione_label(doc) -> str:
+    return _ETICHETTA_SEZIONE.get(doc.sezione.tipo, doc.sezione.tipo.upper())
+
+
+def _segmenti_documento(testo: str) -> list[str]:
+    testo = re.sub(r"[ \t]+", " ", testo or "")
+    testo = re.sub(r"\n{3,}", "\n\n", testo).strip()
+    if not testo:
+        return []
+    parti = [
+        p.strip()
+        for p in re.split(r"\n{2,}|(?<=[.;:!?])\s+(?=(?:\[[A-Z_]+_\d+\]|[A-ZÀ-Ö]))", testo)
+        if p.strip()
+    ]
+    segmenti: list[str] = []
+    for parte in parti:
+        parole = parte.split()
+        if len(parole) <= 90:
+            segmenti.append(parte)
+            continue
+        for i in range(0, len(parole), 70):
+            segmenti.append(" ".join(parole[i : i + 90]))
+    return segmenti
+
+
+def _snippet(testo: str, termini: set[str], numeri: set[str], limite: int = 420) -> str:
+    testo = re.sub(r"\s+", " ", testo or "").strip()
+    if len(testo) <= limite:
+        return testo
+    basso = testo.casefold()
+    posizioni = [
+        basso.find(t)
+        for t in sorted(termini, key=len, reverse=True)
+        if t and basso.find(t) >= 0
+    ]
+    posizioni.extend(testo.find(n) for n in numeri if n and testo.find(n) >= 0)
+    centro = min(posizioni) if posizioni else 0
+    start = max(0, centro - limite // 3)
+    end = min(len(testo), start + limite)
+    start = max(0, end - limite)
+    estratto = testo[start:end].strip()
+    if start > 0:
+        estratto = "..." + estratto
+    if end < len(testo):
+        estratto += "..."
+    return estratto
+
+
+def _affidabilita(score: float) -> tuple[str, str]:
+    if score >= 0.68:
+        return "alta", "Riscontro forte"
+    if score >= 0.38:
+        return "media", "Riscontro utile"
+    return "bassa", "Riscontro debole"
+
+
+def _score_fonte(
+    testo_richiesta: str,
+    parte: str,
+    tipo: str,
+    doc,
+    segmento: str,
+    allegati: set[int],
+) -> tuple[float, list[str], list[str], list[str]]:
+    termini_richiesta = _token_rilevanti(testo_richiesta)
+    termini_segmento = _token_rilevanti(segmento)
+    termini = _termini_coincidenti(termini_richiesta, termini_segmento)
+    numeri = sorted(_numeri_sensibili(testo_richiesta) & _numeri_sensibili(segmento))
+    overlap = len(termini) / max(len(termini_richiesta), 1)
+    similarita = SequenceMatcher(
+        None,
+        _normalizza_richiesta_testo(testo_richiesta),
+        _normalizza_richiesta_testo(segmento)[:700],
+    ).ratio()
+    score = overlap * 0.58 + similarita * 0.20
+    if numeri:
+        score += min(len(numeri), 3) * 0.11
+    if doc.sezione.tipo == parte:
+        score += 0.06
+    elif doc.sezione.tipo == "generici":
+        score += 0.03
+    if doc.id in allegati:
+        score += 0.08
+    basso = segmento.casefold()
+    if tipo == "istruttoria" and any(x in basso for x in ("ctu", "testimon", "prova")):
+        score += 0.06
+    if tipo == "riconvenzionale" and "riconvenzional" in basso:
+        score += 0.06
+    motivi: list[str] = []
+    if termini:
+        motivi.append("termini coincidenti")
+    if numeri:
+        motivi.append("importi/date coincidenti")
+    if doc.id in allegati:
+        motivi.append("documento collegato all'approfondimento")
+    if doc.sezione.tipo == parte:
+        motivi.append("atto della stessa parte")
+    elif doc.sezione.tipo == "generici":
+        motivi.append("documento comune del fascicolo")
+    return min(score, 1.0), termini[:8], numeri[:5], motivi
+
+
+def traccia_fonti_richiesta(
+    testo_richiesta: str,
+    parte: str,
+    tipo: str,
+    documenti,
+    allegati: list[int] | None = None,
+    limite: int = 5,
+) -> list[dict]:
+    """Collega una richiesta agli snippet degli atti che la supportano.
+
+    Lo score è deterministico: overlap lessicale, importi/date coincidenti,
+    sezione del documento e allegati indicati dall'approfondimento.
+    """
+    allegati_set = {int(x) for x in (allegati or [])}
+    candidati: list[dict] = []
+    for doc in documenti:
+        migliore: dict | None = None
+        for posizione, segmento in enumerate(_segmenti_documento(doc.testo_pseudonimizzato)):
+            score, termini, numeri, motivi = _score_fonte(
+                testo_richiesta, parte, tipo, doc, segmento, allegati_set
+            )
+            if score < 0.18 and not numeri:
+                continue
+            livello, label = _affidabilita(score)
+            voce = {
+                "documento_id": doc.id,
+                "documento_nome": _nome_file_documento(doc),
+                "documento_url": _url_documento(doc),
+                "sezione": doc.sezione.tipo,
+                "sezione_label": _sezione_label(doc),
+                "score": round(score, 2),
+                "affidabilita": livello,
+                "affidabilita_label": label,
+                "termini": termini,
+                "numeri": numeri,
+                "motivi": motivi or ["coerenza testuale parziale"],
+                "snippet": _snippet(segmento, set(termini), set(numeri)),
+                "posizione": posizione,
+                "anchor": f"doc-{doc.id}-snippet-{posizione}",
+            }
+            if migliore is None or voce["score"] > migliore["score"]:
+                migliore = voce
+        if migliore:
+            candidati.append(migliore)
+
+    candidati.sort(
+        key=lambda f: (
+            f["score"],
+            f["documento_id"] in allegati_set,
+            len(f["numeri"]),
+            len(f["termini"]),
+        ),
+        reverse=True,
+    )
+    return candidati[:limite]
 
 
 def _filtra_allegati_pertinenti(richiesta, documenti, allegati: list[int]) -> list[int]:
@@ -467,11 +652,21 @@ def approfondisci_richiesta(
     motivazione = str(dati.get("motivazione", "")).strip()
     if not motivazione:
         motivazione = _motivazione_fallback(richiesta, onere, quesiti)
+    allegati_filtrati = _filtra_allegati_pertinenti(richiesta, documenti, allegati)
 
     return {
         "onere_probatorio": onere,
         "motivazione": motivazione,
-        "allegati": _filtra_allegati_pertinenti(richiesta, documenti, allegati),
+        "allegati": allegati_filtrati,
+        "fonti_tracciate": traccia_fonti_richiesta(
+            richiesta.testo,
+            richiesta.parte_richiedente,
+            getattr(richiesta, "tipo", "") or classifica_tipo_richiesta(
+                richiesta.testo, richiesta.parte_richiedente
+            ),
+            documenti,
+            allegati_filtrati,
+        ),
         "non_contestazioni": non_contestate,
         "quesiti_aperti": quesiti,
     }
@@ -649,6 +844,9 @@ def analizza_lavoro(
                 "testo": testo,
                 "confidence": _confidence(r.get("confidence")),
                 "flags": flags,
+                "fonti_tracciate": traccia_fonti_richiesta(
+                    testo, parte, tipo, documenti
+                ),
                 "quesiti_aperti": [str(q) for q in r.get("quesiti_aperti", []) if q],
             }
         )

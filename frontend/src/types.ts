@@ -107,6 +107,69 @@ export interface Richiesta {
   non_contestazioni: string[];
   quesiti_aperti: string[];
   motivazione: string;
+  fonti_tracciate: FonteTracciata[];
+}
+
+export interface FonteTracciata {
+  documento_id: number;
+  documento_nome: string;
+  documento_url: string;
+  sezione: "generici" | "attore" | "convenuto";
+  sezione_label: string;
+  score: number;
+  affidabilita: "alta" | "media" | "bassa";
+  affidabilita_label: string;
+  termini: string[];
+  numeri: string[];
+  motivi: string[];
+  snippet: string;
+  posizione: number;
+  anchor: string;
+}
+
+export type StatoProva =
+  | "da_verificare"
+  | "provato"
+  | "non_provato"
+  | "controverso"
+  | "insufficiente"
+  | "da_decidere";
+
+export type FunzioneFonte =
+  | "supporta"
+  | "contraddice"
+  | "integra"
+  | "neutra"
+  | "insufficiente"
+  | "contesto";
+
+export interface FattoProcessuale {
+  id: number;
+  richiesta_id: number;
+  ordine: number;
+  testo: string;
+  parte_richiedente: Richiesta["parte_richiedente"];
+  tipo: Richiesta["tipo"];
+  richiesta_testo: string;
+  onere_probatorio: string;
+  motivazione: string;
+  allegati_collegati: number[];
+  quesiti_aperti: string[];
+  fonti: FonteTracciata[];
+  fonti_count: number;
+  score_massimo: number;
+  affidabilita_massima: "alta" | "media" | "bassa" | "assente";
+  lacune: string[];
+  stato_prova: StatoProva;
+  stato_prova_label: string;
+  stato_suggerito: StatoProva;
+  stato_suggerito_label: string;
+  funzione_prevalente: FunzioneFonte;
+  funzione_prevalente_label: string;
+  note_operatore: string;
+  quesito_umano: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Bozza {

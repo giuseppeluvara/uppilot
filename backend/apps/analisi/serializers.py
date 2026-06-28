@@ -3,7 +3,8 @@ import re
 from rest_framework import serializers
 from urllib.parse import urlparse
 
-from .models import Bozza, Richiesta, SpuntoRicerca
+from .models import Bozza, FattoProcessuale, Richiesta, SpuntoRicerca
+from .services import documenti_utilizzabili, traccia_fonti_richiesta
 
 
 _FONTI_ISTITUZIONALI = (
@@ -39,9 +40,24 @@ def _qualifica_fonte(url: str) -> tuple[str, str]:
     return "media", "Fonte da verificare"
 
 
+def _fonti_tracciate_richiesta(obj: Richiesta):
+    if obj.fonti_tracciate:
+        return obj.fonti_tracciate
+    documenti = list(documenti_utilizzabili(obj.lavoro))
+    allegati = list(obj.allegati_collegati.values_list("id", flat=True))
+    return traccia_fonti_richiesta(
+        obj.testo,
+        obj.parte_richiedente,
+        obj.tipo,
+        documenti,
+        allegati,
+    )
+
+
 class RichiestaSerializer(serializers.ModelSerializer):
     allegati_collegati = serializers.PrimaryKeyRelatedField(many=True, read_only=True)
     avvisi = serializers.SerializerMethodField()
+    fonti_tracciate = serializers.SerializerMethodField()
 
     _NUMERO_RE = re.compile(
         r"(?:€\s*)?\b\d{1,3}(?:[.\s]\d{3})+(?:,\d+)?\b|\b\d+/\d{2,4}\b|"
@@ -76,6 +92,9 @@ class RichiestaSerializer(serializers.ModelSerializer):
                 )
         return list(dict.fromkeys(avvisi))
 
+    def get_fonti_tracciate(self, obj):
+        return _fonti_tracciate_richiesta(obj)
+
     class Meta:
         model = Richiesta
         fields = [
@@ -93,6 +112,7 @@ class RichiestaSerializer(serializers.ModelSerializer):
             "non_contestazioni",
             "quesiti_aperti",
             "motivazione",
+            "fonti_tracciate",
         ]
         read_only_fields = [
             "ordine",
@@ -107,6 +127,148 @@ class RichiestaSerializer(serializers.ModelSerializer):
             "allegati_collegati",
             "non_contestazioni",
             "quesiti_aperti",
+            "fonti_tracciate",
+        ]
+
+
+class FattoProcessualeSerializer(serializers.ModelSerializer):
+    richiesta_id = serializers.IntegerField(source="richiesta.id", read_only=True)
+    richiesta_testo = serializers.CharField(source="richiesta.testo", read_only=True)
+    parte_richiedente = serializers.CharField(source="richiesta.parte_richiedente", read_only=True)
+    tipo = serializers.CharField(source="richiesta.tipo", read_only=True)
+    onere_probatorio = serializers.CharField(source="richiesta.onere_probatorio", read_only=True)
+    motivazione = serializers.CharField(source="richiesta.motivazione", read_only=True)
+    quesiti_aperti = serializers.JSONField(source="richiesta.quesiti_aperti", read_only=True)
+    allegati_collegati = serializers.SerializerMethodField()
+    fonti = serializers.SerializerMethodField()
+    fonti_count = serializers.SerializerMethodField()
+    score_massimo = serializers.SerializerMethodField()
+    affidabilita_massima = serializers.SerializerMethodField()
+    lacune = serializers.SerializerMethodField()
+    stato_suggerito = serializers.SerializerMethodField()
+    stato_suggerito_label = serializers.SerializerMethodField()
+    stato_prova_label = serializers.SerializerMethodField()
+    funzione_prevalente_label = serializers.SerializerMethodField()
+
+    def _fonti(self, obj) -> list[dict]:
+        return [
+            f
+            for f in _fonti_tracciate_richiesta(obj.richiesta)
+            if isinstance(f, dict)
+        ]
+
+    def _score_massimo(self, obj) -> float:
+        scores = [float(f.get("score") or 0) for f in self._fonti(obj)]
+        return max(scores) if scores else 0.0
+
+    def get_allegati_collegati(self, obj):
+        return list(obj.richiesta.allegati_collegati.values_list("id", flat=True))
+
+    def get_fonti(self, obj):
+        return self._fonti(obj)
+
+    def get_fonti_count(self, obj):
+        return len(self._fonti(obj))
+
+    def get_score_massimo(self, obj):
+        return round(self._score_massimo(obj), 3)
+
+    def get_affidabilita_massima(self, obj):
+        priorita = {"alta": 3, "media": 2, "bassa": 1}
+        fonti = self._fonti(obj)
+        if not fonti:
+            return "assente"
+        return max(
+            (str(f.get("affidabilita") or "bassa") for f in fonti),
+            key=lambda v: priorita.get(v, 0),
+        )
+
+    def get_lacune(self, obj):
+        richiesta = obj.richiesta
+        fonti = self._fonti(obj)
+        score = self._score_massimo(obj)
+        lacune = []
+        if not (richiesta.onere_probatorio or "").strip():
+            lacune.append("Onere probatorio non ancora esplicitato.")
+        if not fonti:
+            lacune.append("Nessuna fonte interna agganciata alla richiesta.")
+        elif score < 0.45:
+            lacune.append("Fonti presenti ma con pertinenza debole: verifica manuale necessaria.")
+        if richiesta.quesiti_aperti:
+            lacune.append(f"{len(richiesta.quesiti_aperti)} quesiti aperti da decidere.")
+        if not (richiesta.motivazione or "").strip():
+            lacune.append("Motivazione in diritto non ancora consolidata.")
+        return lacune
+
+    def get_stato_suggerito(self, obj):
+        fonti = self._fonti(obj)
+        score = self._score_massimo(obj)
+        if not fonti or score < 0.45:
+            return FattoProcessuale.StatoProva.INSUFFICIENTE
+        if obj.richiesta.quesiti_aperti:
+            return FattoProcessuale.StatoProva.DA_DECIDERE
+        return FattoProcessuale.StatoProva.DA_VERIFICARE
+
+    def get_stato_suggerito_label(self, obj):
+        return FattoProcessuale.StatoProva(self.get_stato_suggerito(obj)).label
+
+    def get_stato_prova_label(self, obj):
+        return obj.get_stato_prova_display()
+
+    def get_funzione_prevalente_label(self, obj):
+        return obj.get_funzione_prevalente_display()
+
+    class Meta:
+        model = FattoProcessuale
+        fields = [
+            "id",
+            "richiesta_id",
+            "ordine",
+            "testo",
+            "parte_richiedente",
+            "tipo",
+            "richiesta_testo",
+            "onere_probatorio",
+            "motivazione",
+            "allegati_collegati",
+            "quesiti_aperti",
+            "fonti",
+            "fonti_count",
+            "score_massimo",
+            "affidabilita_massima",
+            "lacune",
+            "stato_prova",
+            "stato_prova_label",
+            "stato_suggerito",
+            "stato_suggerito_label",
+            "funzione_prevalente",
+            "funzione_prevalente_label",
+            "note_operatore",
+            "quesito_umano",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "richiesta_id",
+            "ordine",
+            "parte_richiedente",
+            "tipo",
+            "richiesta_testo",
+            "onere_probatorio",
+            "motivazione",
+            "allegati_collegati",
+            "quesiti_aperti",
+            "fonti",
+            "fonti_count",
+            "score_massimo",
+            "affidabilita_massima",
+            "lacune",
+            "stato_prova_label",
+            "stato_suggerito",
+            "stato_suggerito_label",
+            "funzione_prevalente_label",
+            "created_at",
+            "updated_at",
         ]
 
 

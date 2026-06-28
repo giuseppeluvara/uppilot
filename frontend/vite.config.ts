@@ -13,6 +13,7 @@ export default defineConfig({
   server: {
     host: true,
     port: 5173,
+    allowedHosts: ["mac-mini.local", "mac-mini-giuseppe-luvara.local", "192.168.1.62"],
     // Proxy verso il backend Django in dev.
     proxy: {
       "/api": "http://backend:8000",

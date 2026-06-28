@@ -16,6 +16,10 @@ async function request<T>(path: string, opts: Opts = {}): Promise<T> {
   const headers: Record<string, string> = {};
   let body: BodyInit | undefined;
 
+  if (method !== "GET" && !getCookie("csrftoken")) {
+    await ensureCsrf();
+  }
+
   if (opts.json !== undefined) {
     headers["Content-Type"] = "application/json";
     body = JSON.stringify(opts.json);

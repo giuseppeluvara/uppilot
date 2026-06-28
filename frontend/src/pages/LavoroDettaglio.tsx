@@ -25,11 +25,14 @@ import { api, ApiError } from "@/api";
 import type {
   Bozza,
   Documento,
+  FattoProcessuale,
+  FunzioneFonte,
   Lavoro,
   PrivacyReport,
   ProgressoTask,
   Richiesta,
   Sezione,
+  StatoProva,
   Spunto,
 } from "@/types";
 import { statoLavoro } from "@/lib/stato";
@@ -72,6 +75,24 @@ const TIPO_RICHIESTA: Record<Richiesta["tipo"], string> = {
   altro: "Altro",
 };
 
+const STATO_PROVA: Record<StatoProva, string> = {
+  da_verificare: "Da verificare",
+  provato: "Provato",
+  non_provato: "Non provato",
+  controverso: "Controverso",
+  insufficiente: "Insufficiente",
+  da_decidere: "Da decidere",
+};
+
+const FUNZIONE_FONTE: Record<FunzioneFonte, string> = {
+  supporta: "Supporta",
+  contraddice: "Contraddice",
+  integra: "Integra",
+  neutra: "Neutra",
+  insufficiente: "Insufficiente",
+  contesto: "Solo contesto",
+};
+
 const baseName = (p: string) => decodeURIComponent(p.split("/").pop() || p);
 
 type Pending = { analisi?: boolean; approf?: boolean; ricerca?: boolean };
@@ -87,6 +108,7 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
   const [lavoro, setLavoro] = useState<Lavoro | null>(null);
   const [bozza, setBozza] = useState<Bozza | null>(null);
   const [richieste, setRichieste] = useState<Richiesta[]>([]);
+  const [matrice, setMatrice] = useState<FattoProcessuale[]>([]);
   const [spunti, setSpunti] = useState<Spunto[]>([]);
   const [commerciale, setCommerciale] = useState(false);
   const [pending, setPending] = useState<Pending>({});
@@ -100,11 +122,15 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
       setSpunti(await api.get<Spunto[]>(`/lavori/${id}/spunti/`));
       if (l.analisi_stato === "completata") {
         setRichieste(await api.get<Richiesta[]>(`/lavori/${id}/richieste/`));
+        setMatrice(await api.get<FattoProcessuale[]>(`/lavori/${id}/matrice/`));
         try {
           setBozza(await api.get<Bozza>(`/lavori/${id}/bozza/`));
         } catch {
           /* nessuna bozza */
         }
+      } else {
+        setRichieste([]);
+        setMatrice([]);
       }
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "Errore di caricamento.");
@@ -286,6 +312,13 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
     scarica(false);
   }
 
+  async function aggiornaFattoMatrice(idFatto: number, payload: Partial<FattoProcessuale>) {
+    await azione(async () => {
+      const aggiornato = await api.patch<FattoProcessuale>(`/matrice/${idFatto}/`, payload);
+      setMatrice((righe) => righe.map((r) => (r.id === aggiornato.id ? aggiornato : r)));
+    }, "Matrice aggiornata");
+  }
+
   return (
     <div className="grid gap-6">
       <div className="flex items-center gap-3">
@@ -389,6 +422,10 @@ export function LavoroDettaglio({ id, onIndietro }: { id: number; onIndietro: ()
             }, "Bozza salvata")
           }
         />
+      )}
+
+      {lavoro.analisi_stato === "completata" && (
+        <MatriceFascicoloSection righe={matrice} onAggiorna={aggiornaFattoMatrice} />
       )}
 
       {lavoro.analisi_stato === "completata" && (
@@ -1198,6 +1235,281 @@ function PqmEditor({ bozza, onSalva }: { bozza: Bozza; onSalva: (testo: string) 
   );
 }
 
+function fonteVariant(affidabilita: Richiesta["fonti_tracciate"][number]["affidabilita"]) {
+  if (affidabilita === "alta") return "default";
+  if (affidabilita === "media") return "secondary";
+  return "outline";
+}
+
+function FontiTracciatePanel({ richiesta }: { richiesta: Richiesta }) {
+  const fonti = richiesta.fonti_tracciate ?? [];
+  if (fonti.length === 0) {
+    return (
+      <Alert>
+        <Search />
+        <AlertTitle>Fonti interne</AlertTitle>
+        <AlertDescription>Nessuno snippet agganciato automaticamente a questa richiesta.</AlertDescription>
+      </Alert>
+    );
+  }
+  return (
+    <div className="grid gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-sm font-medium">Fonti interne</p>
+        {fonti.slice(0, 3).map((fonte) => (
+          <Badge key={fonte.anchor} variant={fonteVariant(fonte.affidabilita)}>
+            {fonte.affidabilita_label} {Math.round(fonte.score * 100)}%
+          </Badge>
+        ))}
+      </div>
+
+      <div className="grid gap-2">
+        {fonti.map((fonte) => (
+          <details key={fonte.anchor} className="rounded-md border bg-muted/20 px-3 py-2">
+            <summary className="cursor-pointer list-none">
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <Badge variant={fonteVariant(fonte.affidabilita)}>
+                  {Math.round(fonte.score * 100)}%
+                </Badge>
+                <span className="font-medium">{fonte.documento_nome}</span>
+                <Badge variant="outline">{fonte.sezione_label}</Badge>
+                {fonte.numeri.slice(0, 2).map((n) => (
+                  <Badge key={n} variant="outline">
+                    {n}
+                  </Badge>
+                ))}
+                <span className="text-muted-foreground">{fonte.affidabilita_label}</span>
+              </div>
+            </summary>
+            <div className="mt-3 grid gap-2 border-t pt-3">
+              <p className="text-sm leading-6 text-muted-foreground">{fonte.snippet}</p>
+              {(fonte.termini.length > 0 || fonte.motivi.length > 0) && (
+                <div className="flex flex-wrap gap-2">
+                  {fonte.motivi.map((m) => (
+                    <Badge key={m} variant="secondary">
+                      {m}
+                    </Badge>
+                  ))}
+                  {fonte.termini.slice(0, 6).map((t) => (
+                    <Badge key={t} variant="outline">
+                      {t}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+              {fonte.documento_url && (
+                <div>
+                  <Button asChild size="sm" variant="outline">
+                    <a href={fonte.documento_url} target="_blank" rel="noreferrer">
+                      <ExternalLink />
+                      Apri documento
+                    </a>
+                  </Button>
+                </div>
+              )}
+            </div>
+          </details>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function statoProvaVariant(stato: StatoProva) {
+  if (stato === "provato") return "default";
+  if (stato === "non_provato" || stato === "insufficiente") return "destructive";
+  if (stato === "controverso" || stato === "da_decidere") return "secondary";
+  return "outline";
+}
+
+function MatriceFascicoloSection({
+  righe,
+  onAggiorna,
+}: {
+  righe: FattoProcessuale[];
+  onAggiorna: (idFatto: number, payload: Partial<FattoProcessuale>) => Promise<void>;
+}) {
+  const conLacune = righe.filter((r) => r.lacune.length > 0).length;
+  const fonti = righe.reduce((n, r) => n + r.fonti_count, 0);
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <CardTitle>Matrice del fascicolo</CardTitle>
+          <div className="flex flex-wrap gap-2">
+            <Badge variant="secondary">{righe.length} righe</Badge>
+            <Badge variant="outline">{fonti} fonti</Badge>
+            <Badge variant={conLacune ? "destructive" : "outline"}>{conLacune} lacune</Badge>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="grid gap-3">
+        {righe.length === 0 ? (
+          <Alert>
+            <HelpCircle />
+            <AlertTitle>Matrice non disponibile</AlertTitle>
+            <AlertDescription>Esegui prima l'analisi per estrarre le richieste.</AlertDescription>
+          </Alert>
+        ) : (
+          righe.map((riga) => (
+            <MatriceFascicoloRow key={riga.id} riga={riga} onAggiorna={onAggiorna} />
+          ))
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function MatriceFascicoloRow({
+  riga,
+  onAggiorna,
+}: {
+  riga: FattoProcessuale;
+  onAggiorna: (idFatto: number, payload: Partial<FattoProcessuale>) => Promise<void>;
+}) {
+  const [testo, setTesto] = useState(riga.testo);
+  const [quesito, setQuesito] = useState(riga.quesito_umano);
+  const [note, setNote] = useState(riga.note_operatore);
+
+  useEffect(() => {
+    setTesto(riga.testo);
+    setQuesito(riga.quesito_umano);
+    setNote(riga.note_operatore);
+  }, [riga.id, riga.testo, riga.quesito_umano, riga.note_operatore]);
+
+  const sporco =
+    testo !== riga.testo ||
+    quesito !== riga.quesito_umano ||
+    note !== riga.note_operatore;
+  const fontiPrincipali = riga.fonti.slice(0, 3);
+
+  return (
+    <div className="grid gap-3 rounded-lg border p-3">
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_18rem] lg:items-start">
+        <div className="grid gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="secondary" className="capitalize">
+              {riga.parte_richiedente}
+            </Badge>
+            <Badge variant={riga.tipo === "riconvenzionale" ? "default" : "outline"}>
+              {TIPO_RICHIESTA[riga.tipo]}
+            </Badge>
+            <Badge variant={statoProvaVariant(riga.stato_prova)}>
+              {riga.stato_prova_label}
+            </Badge>
+            <Badge variant="outline">Suggerito: {riga.stato_suggerito_label}</Badge>
+            {riga.score_massimo > 0 && (
+              <Badge variant="outline">{Math.round(riga.score_massimo * 100)}%</Badge>
+            )}
+          </div>
+          <p className="text-sm leading-6">{riga.richiesta_testo}</p>
+          {riga.onere_probatorio && (
+            <p className="text-sm text-muted-foreground">{riga.onere_probatorio}</p>
+          )}
+        </div>
+
+        <div className="grid gap-2">
+          <Label className="text-xs">Stato prova</Label>
+          <select
+            value={riga.stato_prova}
+            onChange={(e) =>
+              void onAggiorna(riga.id, { stato_prova: e.target.value as StatoProva })
+            }
+            className="h-9 rounded-md border bg-background px-3 text-sm"
+          >
+            {Object.entries(STATO_PROVA).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+          <Label className="text-xs">Funzione fonte</Label>
+          <select
+            value={riga.funzione_prevalente}
+            onChange={(e) =>
+              void onAggiorna(riga.id, {
+                funzione_prevalente: e.target.value as FunzioneFonte,
+              })
+            }
+            className="h-9 rounded-md border bg-background px-3 text-sm"
+          >
+            {Object.entries(FUNZIONE_FONTE).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {riga.lacune.length > 0 && (
+        <div className="grid gap-1">
+          {riga.lacune.map((lacuna) => (
+            <p
+              key={lacuna}
+              className="rounded-md border border-destructive/25 bg-destructive/5 px-2 py-1 text-xs leading-5 text-destructive"
+            >
+              {lacuna}
+            </p>
+          ))}
+        </div>
+      )}
+
+      {fontiPrincipali.length > 0 ? (
+        <div className="grid gap-2">
+          {fontiPrincipali.map((fonte) => (
+            <details key={fonte.anchor} className="rounded-md bg-muted/30 px-3 py-2">
+              <summary className="cursor-pointer list-none">
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <Badge variant={fonteVariant(fonte.affidabilita)}>
+                    {Math.round(fonte.score * 100)}%
+                  </Badge>
+                  <span className="font-medium">{fonte.documento_nome}</span>
+                  <Badge variant="outline">{fonte.sezione_label}</Badge>
+                </div>
+              </summary>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">{fonte.snippet}</p>
+            </details>
+          ))}
+        </div>
+      ) : (
+        <Alert>
+          <Search />
+          <AlertTitle>Fonti assenti</AlertTitle>
+          <AlertDescription>Nessuna fonte interna collegata a questa riga.</AlertDescription>
+        </Alert>
+      )}
+
+      <div className="grid gap-3 md:grid-cols-3">
+        <div className="grid gap-2">
+          <Label>Fatto rilevante</Label>
+          <Textarea value={testo} onChange={(e) => setTesto(e.target.value)} className="min-h-24" />
+        </div>
+        <div className="grid gap-2">
+          <Label>Quesito umano</Label>
+          <Textarea value={quesito} onChange={(e) => setQuesito(e.target.value)} className="min-h-24" />
+        </div>
+        <div className="grid gap-2">
+          <Label>Note operative</Label>
+          <Textarea value={note} onChange={(e) => setNote(e.target.value)} className="min-h-24" />
+        </div>
+      </div>
+
+      <div className="flex justify-end">
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={!sporco}
+          onClick={() => onAggiorna(riga.id, { testo, quesito_umano: quesito, note_operatore: note })}
+        >
+          <Save />
+          Salva riga
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function RichiesteSection({
   lavoro,
   richieste,
@@ -1236,6 +1548,9 @@ function RichiesteSection({
         <Badge variant="outline">{approfondite} approfondite</Badge>
         <Badge variant="outline">
           {richieste.reduce((n, r) => n + r.allegati_collegati.length, 0)} allegati collegati
+        </Badge>
+        <Badge variant="outline">
+          {richieste.reduce((n, r) => n + (r.fonti_tracciate?.length ?? 0), 0)} fonti tracciate
         </Badge>
         <Badge variant="outline">
           {richieste.reduce((n, r) => n + r.quesiti_aperti.length, 0)} quesiti aperti
@@ -1282,6 +1597,9 @@ function RichiesteSection({
                 <Badge variant={r.confidence < 0.55 ? "destructive" : "outline"}>
                   {Math.round((r.confidence ?? 0) * 100)}%
                 </Badge>
+                {r.fonti_tracciate?.length > 0 && (
+                  <Badge variant="outline">{r.fonti_tracciate.length} fonti</Badge>
+                )}
                 <span className="text-left font-normal">{r.testo}</span>
               </span>
             </AccordionTrigger>
@@ -1294,6 +1612,8 @@ function RichiesteSection({
                     <AlertDescription>{avviso}</AlertDescription>
                   </Alert>
                 ))}
+
+              <FontiTracciatePanel richiesta={r} />
 
               <MotivazioneEditor richiesta={r} onSalva={onSalvaMotivazione} />
 

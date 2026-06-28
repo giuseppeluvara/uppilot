@@ -26,6 +26,14 @@ UPPilot si **avvia da solo** quando accendi il PC. Apri il browser su:
 
 ed entra con le tue credenziali.
 
+Da un altro dispositivo sulla stessa rete Wi-Fi/LAN puoi aprire:
+
+> **http://mac-mini.local:5173**
+
+In alternativa usa l'IP statico del Mac mini:
+
+> **http://192.168.1.62:5173**
+
 Se la pagina non si apre, attendi ~1 minuto (i servizi stanno partendo) e ricarica. Se ancora non
 va, vedi [Problemi comuni](#6-problemi-comuni).
 
@@ -153,6 +161,7 @@ cat backup_uppilot.sql | docker compose exec -T db psql -U uppilot uppilot
 | Sintomo | Cosa fare |
 |---|---|
 | La pagina `:5173` non si apre | Attendi 1 minuto e ricarica. Verifica che **Docker Desktop** sia avviato (icona nella barra in alto). |
+| Da iPad/altro dispositivo non si apre `mac-mini.local:5173` | Prova `http://192.168.1.62:5173`. Verifica che il dispositivo sia sulla stessa rete del Mac mini. |
 | Compare "Ambiente locale da verificare" | Leggi il dettaglio nel banner: indica se mancano Redis, privacy-filter, Ollama o un modello locale. |
 | L'analisi resta "in corso" o va in errore | Se devi fermarla subito premi **Interrompi**. Se il problema si ripete, serve **Ollama** attivo sull'host e visibile ai container: avvia con `OLLAMA_HOST=0.0.0.0:11434 ollama serve`; se manca un modello, rilancia `make provision`. |
 | "Anonimizzazione fallita" su un documento | Premi **Riprova**. Su PC senza GPU il filtro è più lento: riprova a documento. |

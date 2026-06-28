@@ -102,11 +102,22 @@ def test_export_include_motivazione_e_pqm(db, django_user_model):
         parte_richiedente=Richiesta.Parte.ATTORE,
         testo="Chiede X.",
         motivazione="La domanda è fondata perché risulta provata.",
+        fonti_tracciate=[
+            {
+                "documento_id": 10,
+                "documento_nome": "atto.pdf",
+                "score": 0.82,
+                "affidabilita_label": "Riscontro forte",
+                "snippet": "Snippet pseudonimizzato a supporto della domanda.",
+            }
+        ],
         ordine=0,
     )
     testo = _testi(genera_docx(lavoro))
     assert "La domanda è fondata perché risulta provata." in testo
     assert "Condanna al pagamento di 100." in testo
+    assert "Fonti interne tracciate" in testo
+    assert "Snippet pseudonimizzato" in testo
     assert "[Da compilare dall'operatore]" not in testo
 
 

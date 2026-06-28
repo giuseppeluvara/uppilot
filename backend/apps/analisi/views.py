@@ -11,8 +11,13 @@ from apps.casi.models import Documento, Lavoro
 from apps.casi.privacy import privacy_report
 
 from .export import genera_docx
-from .models import Bozza, Richiesta, SpuntoRicerca
-from .serializers import BozzaSerializer, RichiestaSerializer, SpuntoRicercaSerializer
+from .models import Bozza, FattoProcessuale, Richiesta, SpuntoRicerca
+from .serializers import (
+    BozzaSerializer,
+    FattoProcessualeSerializer,
+    RichiestaSerializer,
+    SpuntoRicercaSerializer,
+)
 from .services import documenti_utilizzabili
 from .tasks import (
     analizza_lavoro_task,
@@ -101,6 +106,48 @@ def _documenti_da_verificare(lavoro: Lavoro):
         sezione__lavoro=lavoro,
         pseudonimizzato=True,
         stato_accettazione=Documento.StatoAccettazione.DA_VERIFICARE,
+    )
+
+
+def _testo_fatto_iniziale(richiesta: Richiesta) -> str:
+    testo = (richiesta.testo or "").strip()
+    if len(testo) <= 320:
+        return testo
+    return testo[:317].rstrip() + "..."
+
+
+def _quesito_matrice_iniziale(richiesta: Richiesta) -> str:
+    quesiti = [str(q).strip() for q in (richiesta.quesiti_aperti or []) if str(q).strip()]
+    if quesiti:
+        return quesiti[0]
+    if not (richiesta.onere_probatorio or "").strip():
+        return "Quali fatti costitutivi/impeditivi e quali prove sorreggono questa richiesta?"
+    return ""
+
+
+def _sincronizza_matrice_lavoro(lavoro: Lavoro) -> None:
+    """Crea una prima riga matrice per ogni richiesta priva di fatti.
+
+    La matrice parte minimale: una riga per richiesta. In seguito la riga potrà
+    essere spezzata manualmente in più fatti processuali senza perdere il legame
+    con la richiesta.
+    """
+
+    richieste = list(Richiesta.objects.filter(lavoro=lavoro).order_by("ordine", "id"))
+    esistenti = set(
+        FattoProcessuale.objects.filter(richiesta__lavoro=lavoro).values_list(
+            "richiesta_id", flat=True
+        )
+    )
+    FattoProcessuale.objects.bulk_create(
+        FattoProcessuale(
+            richiesta=richiesta,
+            testo=_testo_fatto_iniziale(richiesta),
+            quesito_umano=_quesito_matrice_iniziale(richiesta),
+            ordine=0,
+        )
+        for richiesta in richieste
+        if richiesta.id not in esistenti
     )
 
 
@@ -346,6 +393,22 @@ class RichiesteListView(ListAPIView):
         return Richiesta.objects.filter(lavoro=lavoro)
 
 
+class MatriceLavoroView(ListAPIView):
+    """Matrice richiesta -> fatto -> prova/lacuna del lavoro."""
+
+    serializer_class = FattoProcessualeSerializer
+
+    def get_queryset(self):
+        lavoro = _lavoro_utente(self.request, self.kwargs["lavoro_id"])
+        _sincronizza_matrice_lavoro(lavoro)
+        return (
+            FattoProcessuale.objects.filter(richiesta__lavoro=lavoro)
+            .select_related("richiesta", "richiesta__lavoro")
+            .prefetch_related("richiesta__allegati_collegati")
+            .order_by("richiesta__ordine", "ordine", "id")
+        )
+
+
 class RichiestaUpdateView(APIView):
     """Editor: l'operatore redige la motivazione 'in diritto' di una richiesta (§1)."""
 
@@ -356,6 +419,21 @@ class RichiestaUpdateView(APIView):
             richiesta.motivazione = motivazione
             richiesta.save(update_fields=["motivazione"])
         return Response(RichiestaSerializer(richiesta).data)
+
+
+class FattoProcessualeUpdateView(APIView):
+    """Aggiorna la valutazione umana di una riga della matrice prove."""
+
+    def patch(self, request, pk):
+        fatto = get_object_or_404(
+            FattoProcessuale,
+            pk=pk,
+            richiesta__lavoro__utente=request.user,
+        )
+        serializer = FattoProcessualeSerializer(fatto, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
 
 
 class BozzaView(APIView):
@@ -404,6 +482,11 @@ class EsportaDocxView(APIView):
                         r.testo,
                         r.onere_probatorio,
                         r.motivazione,
+                        "\n".join(
+                            str(f.get("snippet", ""))
+                            for f in (r.fonti_tracciate or [])
+                            if isinstance(f, dict)
+                        ),
                         "\n".join(r.non_contestazioni or []),
                         "\n".join(r.quesiti_aperti or []),
                     ]

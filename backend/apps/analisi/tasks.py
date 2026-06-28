@@ -151,6 +151,7 @@ def _contenuto_per_richiesta(richieste: list[Richiesta]) -> dict[str, dict]:
             "testo": richiesta.testo,
             "onere_probatorio": richiesta.onere_probatorio,
             "motivazione": richiesta.motivazione,
+            "fonti_tracciate": richiesta.fonti_tracciate or [],
             "non_contestazioni": richiesta.non_contestazioni or [],
             "quesiti_aperti": richiesta.quesiti_aperti or [],
             "allegati_collegati": list(
@@ -257,6 +258,7 @@ def analizza_lavoro_task(lavoro_id: int, commerciale: bool = False) -> None:
             testo=r["testo"],
             confidence=_confidence(r.get("confidence", 0.65)),
             flags=r.get("flags", []),
+            fonti_tracciate=r.get("fonti_tracciate", []),
             quesiti_aperti=r["quesiti_aperti"],
             stato=Richiesta.Stato.ANALIZZATA,
             ordine=i,
@@ -365,12 +367,14 @@ def approfondisci_lavoro_task(lavoro_id: int, commerciale: bool = False) -> None
             )
             if len(dati["allegati"]) > 3:
                 flags.append("Allegati collegati oltre la soglia attesa: rivedi pertinenza.")
+            richiesta.fonti_tracciate = dati.get("fonti_tracciate", [])
             richiesta.flags = list(dict.fromkeys(flags))
             richiesta.stato = Richiesta.Stato.APPROFONDITA
             richiesta.save(
                 update_fields=[
                     "onere_probatorio",
                     "motivazione",
+                    "fonti_tracciate",
                     "non_contestazioni",
                     "quesiti_aperti",
                     "flags",

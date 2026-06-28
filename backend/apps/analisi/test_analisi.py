@@ -6,7 +6,7 @@ from rest_framework.test import APIClient
 
 from apps.analisi import tasks
 from apps.analisi.models import Bozza, Richiesta
-from apps.analisi.services import analizza_lavoro, classifica_tipo_richiesta
+from apps.analisi.services import analizza_lavoro, classifica_tipo_richiesta, traccia_fonti_richiesta
 from apps.casi.models import Documento, Lavoro, SezioneDocumenti
 from apps.casi.states import StatoLavoro
 
@@ -162,6 +162,28 @@ def test_classificazione_difesa_e_riconvenzionale_convenuto():
     )
 
 
+def test_traccia_fonti_richiesta_con_score_snippet_e_documento(lavoro):
+    doc = _doc_accettato(
+        lavoro,
+        SezioneDocumenti.Tipo.ATTORE,
+        "L'attrice chiede la condanna al pagamento di euro 28.600 per la fattura n. [PRIVATE_DATE_4].",
+    )
+
+    fonti = traccia_fonti_richiesta(
+        "condannare il convenuto al pagamento di euro 28.600",
+        "attore",
+        Richiesta.Tipo.DOMANDA,
+        [doc],
+    )
+
+    assert fonti
+    assert fonti[0]["documento_id"] == doc.id
+    assert fonti[0]["score"] >= 0.38
+    assert fonti[0]["affidabilita"] in {"alta", "media"}
+    assert "28.600" in fonti[0]["snippet"]
+    assert "28.600" in fonti[0]["numeri"]
+
+
 def test_pqm_scheletro_usa_label_convenuto_pulita(lavoro):
     richiesta = Richiesta.objects.create(
         lavoro=lavoro,
@@ -216,6 +238,8 @@ def test_task_persiste_bozza_richieste_e_transiziona(lavoro, monkeypatch):
     richiesta = Richiesta.objects.get(lavoro=lavoro)
     assert richiesta.parte_richiedente == "attore"
     assert richiesta.quesiti_aperti  # punto discrezionale posto come quesito (§1)
+    assert richiesta.fonti_tracciate
+    assert richiesta.fonti_tracciate[0]["documento_id"]
 
 
 def test_analisi_progress_callback_due_fasi(lavoro):

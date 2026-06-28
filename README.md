@@ -95,10 +95,25 @@ print("Ollama raggiungibile dal worker")
 PY
 ```
 
-Nel workspace è presente `scripts/uppilot-redis-at-login.sh`: può essere richiamato da un
-LaunchAgent utente per riattivare il Redis del progetto dopo il login, attendendo Docker Desktop
-se non è ancora pronto. In questa macchina sono stati configurati due LaunchAgent utente:
-`com.uppilot.ollama` (Ollama persistente) e `com.uppilot.redis` (Redis del compose).
+Nel workspace sono presenti script richiamabili da LaunchAgent utente:
+
+- `scripts/uppilot-redis-at-login.sh`: riattiva il Redis del progetto dopo il login;
+- `scripts/uppilot-stack-at-login.sh`: avvia l'intero stack Docker UPPilot dopo il login.
+
+Entrambi attendono Docker Desktop se non è ancora pronto. In questa macchina sono stati configurati
+i LaunchAgent utente `com.uppilot.ollama` (Ollama persistente), `com.uppilot.redis` (Redis del
+compose) e `com.uppilot.stack` (stack UPPilot completo).
+
+### Accesso dalla rete locale
+
+Sul Mac mini di sviluppo UPPilot è pubblicato anche sulla LAN:
+
+- `http://mac-mini.local:5173`
+- `http://192.168.1.62:5173`
+
+Il nome Bonjour è `mac-mini.local`; il Wi-Fi è configurato manualmente su `192.168.1.62/24` con
+router/DNS `192.168.1.1`. Per una configurazione ancora più robusta è preferibile replicare questa
+assegnazione come prenotazione DHCP sul router per il MAC Wi-Fi `1c:f6:4c:46:20:f4`.
 
 La UI espone inoltre un preflight ambiente (`/api/health/ai/`) che controlla DB, Redis,
 privacy-filter, Ollama e modelli configurati prima di lanciare task lunghi.

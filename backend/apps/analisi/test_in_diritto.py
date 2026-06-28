@@ -5,7 +5,7 @@ import pytest
 from rest_framework.test import APIClient
 
 from apps.analisi import tasks
-from apps.analisi.models import Bozza, Richiesta
+from apps.analisi.models import Bozza, FattoProcessuale, Richiesta
 from apps.analisi.services import approfondisci_richiesta
 from apps.casi.models import Documento, Lavoro, SezioneDocumenti
 
@@ -41,7 +41,11 @@ def _doc(lavoro, tipo, testo_pseudo):
 def scenario(db, django_user_model):
     u = django_user_model.objects.create_user(username="r", password="x")
     lavoro = Lavoro.objects.create(utente=u, titolo="Caso")
-    doc = _doc(lavoro, SezioneDocumenti.Tipo.ATTORE, "[PRIVATE_PERSON_1] produce il contratto.")
+    doc = _doc(
+        lavoro,
+        SezioneDocumenti.Tipo.ATTORE,
+        "[PRIVATE_PERSON_1] produce il contratto e chiede l'adempimento del contratto.",
+    )
     richiesta = Richiesta.objects.create(
         lavoro=lavoro,
         parte_richiedente=Richiesta.Parte.ATTORE,
@@ -94,11 +98,14 @@ def test_task_popola_richiesta_e_stato(scenario, monkeypatch):
     assert richiesta.onere_probatorio.startswith("Onere")
     assert richiesta.motivazione.startswith("La domanda")
     assert list(richiesta.allegati_collegati.values_list("id", flat=True)) == [doc.id]
+    assert richiesta.fonti_tracciate
+    assert richiesta.fonti_tracciate[0]["documento_id"] == doc.id
     assert richiesta.quesiti_aperti  # discrezionale come quesito (§1)
     bozza = Bozza.objects.get(lavoro=lavoro)
     contenuto = bozza.contenuto_per_richiesta[str(richiesta.id)]
     assert contenuto["motivazione"] == richiesta.motivazione
     assert contenuto["allegati_collegati"] == [doc.id]
+    assert contenuto["fonti_tracciate"][0]["documento_id"] == doc.id
     assert bozza.pqm
 
 
@@ -229,6 +236,92 @@ def test_endpoint_approfondisci(scenario, monkeypatch):
     client.force_authenticate(user=lavoro.utente)
     resp = client.post(f"/api/lavori/{lavoro.id}/approfondisci/")
     assert resp.status_code == 202
+
+
+def test_richieste_api_calcola_fonti_tracciate_legacy(scenario):
+    lavoro, doc, richiesta = scenario
+    client = APIClient()
+    client.force_authenticate(user=lavoro.utente)
+
+    resp = client.get(f"/api/lavori/{lavoro.id}/richieste/")
+
+    assert resp.status_code == 200
+    fonti = resp.json()[0]["fonti_tracciate"]
+    assert fonti
+    assert fonti[0]["documento_id"] == doc.id
+
+
+def test_matrice_api_crea_righe_da_richieste_e_fonti(scenario):
+    lavoro, doc, richiesta = scenario
+    richiesta.onere_probatorio = "L'attore deve provare il contratto e l'inadempimento."
+    richiesta.fonti_tracciate = [
+        {
+            "documento_id": doc.id,
+            "documento_nome": "x.pdf",
+            "documento_url": "/media/x.pdf",
+            "sezione": "attore",
+            "sezione_label": "Fascicolo dell'attore",
+            "score": 0.78,
+            "affidabilita": "alta",
+            "affidabilita_label": "Alta affidabilità",
+            "termini": ["contratto"],
+            "numeri": [],
+            "motivi": ["stessa parte"],
+            "snippet": "produce il contratto e chiede l'adempimento",
+            "posizione": 0,
+            "anchor": f"doc-{doc.id}-0",
+        }
+    ]
+    richiesta.save(update_fields=["onere_probatorio", "fonti_tracciate"])
+    client = APIClient()
+    client.force_authenticate(user=lavoro.utente)
+
+    resp = client.get(f"/api/lavori/{lavoro.id}/matrice/")
+
+    assert resp.status_code == 200
+    assert FattoProcessuale.objects.filter(richiesta=richiesta).count() == 1
+    riga = resp.json()[0]
+    assert riga["richiesta_id"] == richiesta.id
+    assert riga["testo"] == richiesta.testo
+    assert riga["stato_prova"] == FattoProcessuale.StatoProva.DA_VERIFICARE
+    assert riga["fonti_count"] == 1
+    assert riga["fonti"][0]["documento_id"] == doc.id
+    assert riga["score_massimo"] == 0.78
+
+
+def test_matrice_patch_persistente_e_protetta(scenario, django_user_model):
+    lavoro, _, richiesta = scenario
+    fatto = FattoProcessuale.objects.create(
+        richiesta=richiesta,
+        testo="Verificare il contratto prodotto.",
+    )
+    client = APIClient()
+    client.force_authenticate(user=lavoro.utente)
+
+    resp = client.patch(
+        f"/api/matrice/{fatto.id}/",
+        {
+            "stato_prova": FattoProcessuale.StatoProva.PROVATO,
+            "funzione_prevalente": FattoProcessuale.FunzioneFonte.SUPPORTA,
+            "note_operatore": "Contratto prodotto e non contestato sul punto.",
+            "quesito_umano": "Verificare se l'inadempimento è grave.",
+        },
+        format="json",
+    )
+
+    assert resp.status_code == 200
+    fatto.refresh_from_db()
+    assert fatto.stato_prova == FattoProcessuale.StatoProva.PROVATO
+    assert "non contestato" in fatto.note_operatore
+
+    intruso = django_user_model.objects.create_user(username="intruso", password="x")
+    client.force_authenticate(user=intruso)
+    negata = client.patch(
+        f"/api/matrice/{fatto.id}/",
+        {"stato_prova": FattoProcessuale.StatoProva.NON_PROVATO},
+        format="json",
+    )
+    assert negata.status_code == 404
 
 
 def test_endpoint_approfondisci_senza_richieste_400(db, django_user_model):

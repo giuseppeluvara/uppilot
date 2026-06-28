@@ -51,6 +51,9 @@ class Richiesta(models.Model):
     # Motivazione "in diritto" redatta dall'operatore (il discrezionale, §1).
     motivazione = models.TextField(blank=True)
 
+    # Fonti interne tracciate deterministicamente sugli atti pseudonimizzati.
+    fonti_tracciate = models.JSONField(default=list, blank=True)
+
     ordine = models.PositiveIntegerField(default=0)
 
     class Meta:
@@ -58,6 +61,57 @@ class Richiesta(models.Model):
 
     def __str__(self) -> str:
         return f"Richiesta {self.ordine} ({self.get_parte_richiedente_display()})"
+
+
+class FattoProcessuale(models.Model):
+    """Riga della matrice richiesta/prova.
+
+    La matrice rende esplicito il passaggio richiesta -> fatto rilevante ->
+    prova/lacuna. Lo stato prova resta una valutazione dell'operatore: gli score
+    delle fonti aiutano la verifica ma non decidono automaticamente.
+    """
+
+    class StatoProva(models.TextChoices):
+        DA_VERIFICARE = "da_verificare", "Da verificare"
+        PROVATO = "provato", "Provato"
+        NON_PROVATO = "non_provato", "Non provato"
+        CONTROVERSO = "controverso", "Controverso"
+        INSUFFICIENTE = "insufficiente", "Insufficiente"
+        DA_DECIDERE = "da_decidere", "Da decidere"
+
+    class FunzioneFonte(models.TextChoices):
+        SUPPORTA = "supporta", "Supporta"
+        CONTRADDICE = "contraddice", "Contraddice"
+        INTEGRA = "integra", "Integra"
+        NEUTRA = "neutra", "Neutra"
+        INSUFFICIENTE = "insufficiente", "Insufficiente"
+        CONTESTO = "contesto", "Solo contesto"
+
+    richiesta = models.ForeignKey(
+        Richiesta, on_delete=models.CASCADE, related_name="fatti_processuali"
+    )
+    testo = models.TextField()
+    stato_prova = models.CharField(
+        max_length=24,
+        choices=StatoProva.choices,
+        default=StatoProva.DA_VERIFICARE,
+    )
+    funzione_prevalente = models.CharField(
+        max_length=24,
+        choices=FunzioneFonte.choices,
+        default=FunzioneFonte.SUPPORTA,
+    )
+    note_operatore = models.TextField(blank=True)
+    quesito_umano = models.TextField(blank=True)
+    ordine = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["richiesta__ordine", "ordine", "id"]
+
+    def __str__(self) -> str:
+        return f"Fatto {self.ordine} - richiesta {self.richiesta_id}"
 
 
 class SpuntoRicerca(models.Model):
